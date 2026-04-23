@@ -1,0 +1,78 @@
+EvoAgent
+Copyright 2026 Focus Technology Co., Ltd.
+
+Authors: Aimin Zhang*†, Fangzheng Li†, Fuwei Jia, Jiajing Guo, Chen Lv.
+All authors affiliated with Focus Technology Co., Ltd.
+(* corresponding author; † equal contribution)
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use the contents of this repository except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+-------------------------------------------------------------------------------
+Third-party dependencies
+-------------------------------------------------------------------------------
+
+This software depends on the following third-party open-source projects. Each
+is used unmodified and is the copyright of its respective owners. Licences are
+reproduced or referenced inline with each project's own distribution.
+
+Runtime:
+  - openai                (Apache-2.0)   https://github.com/openai/openai-python
+  - openai-agents         (MIT)          https://github.com/openai/openai-agents-python
+  - tiktoken              (MIT)          https://github.com/openai/tiktoken
+  - fastapi               (MIT)          https://github.com/tiangolo/fastapi
+  - uvicorn               (BSD-3-Clause) https://github.com/encode/uvicorn
+  - gunicorn              (MIT)          https://github.com/benoitc/gunicorn
+  - uvloop                (Apache-2.0)   https://github.com/MagicStack/uvloop
+  - httpx                 (BSD-3-Clause) https://github.com/encode/httpx
+  - aiohttp               (Apache-2.0)   https://github.com/aio-libs/aiohttp
+  - pydantic              (MIT)          https://github.com/pydantic/pydantic
+  - python-dotenv         (BSD-3-Clause) https://github.com/theskumar/python-dotenv
+  - loguru                (MIT)          https://github.com/Delgan/loguru
+  - tavily-python         (MIT)          https://github.com/tavily-ai/tavily-python
+  - beautifulsoup4        (MIT)          https://www.crummy.com/software/BeautifulSoup/
+  - html2text             (GPL-3.0-only) https://github.com/Alir3z4/html2text
+  - PyYAML                (MIT)          https://github.com/yaml/pyyaml
+  - json-repair           (MIT)          https://github.com/mangiucugna/json_repair
+  - numpy                 (BSD-3-Clause) https://github.com/numpy/numpy
+  - python-multipart      (Apache-2.0)   https://github.com/Kludex/python-multipart
+  - requests              (Apache-2.0)   https://github.com/psf/requests
+
+Frontend (CDN, loaded at runtime):
+  - marked                (MIT)          https://github.com/markedjs/marked
+  - DOMPurify             (Apache-2.0 OR MPL-2.0) https://github.com/cure53/DOMPurify
+
+Design attributions:
+  - The nine-section history compaction prompt in `utils/history_compressor.py`
+    is adapted from Claude Code's compaction format (Anthropic).
+  - The Harness Engineering framing in README / SOUL.md references work by
+    Mitchell Hashimoto, OpenAI, Paul Iusztin, and Martin Fowler / Birgitta
+    Böckeler — see the "References" section at the bottom of this NOTICE.
+
+-------------------------------------------------------------------------------
+References (non-code, for attribution)
+-------------------------------------------------------------------------------
+
+  - Mitchell Hashimoto. "My AI Adoption Journey" (2026-02)
+    https://mitchellh.com/writing/my-ai-adoption-journey
+  - OpenAI. "Harness Engineering: Leveraging Codex in an Agent-First World"
+    https://openai.com/index/harness-engineering/
+  - Paul Iusztin. "Agentic Harness Engineering: LLMs as the New OS"
+    https://www.decodingai.com/p/agentic-harness-engineering
+  - Martin Fowler / Birgitta Böckeler. "Harness Engineering for Coding
+    Agent Users" (2026-04)
+    https://martinfowler.com/articles/harness-engineering.html
+  - Anthropic. "Effective Harnesses for Long-Running Agents"
+    https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents
+
+-------------------------------------------------------------------------------
+End of NOTICE.

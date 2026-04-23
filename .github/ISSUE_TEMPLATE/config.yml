@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/Focus-AI-Center/Mentarc-EvoAgent/security/advisories/new
+    about: Please report vulnerabilities privately, not as public issues. See SECURITY.md.
+  - name: Reproducibility / paper question
+    url: https://github.com/Focus-AI-Center/Mentarc-EvoAgent/blob/main/REPRODUCIBILITY.md
+    about: For dataset / experiment reproduction questions, start here.

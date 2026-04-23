@@ -1,0 +1,30 @@
+# Keep the build context small and avoid leaking dev-only artefacts.
+.git
+.github
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.ruff_cache
+.pytest_cache
+.mypy_cache
+
+# Local data / logs
+data
+logs
+*.log
+results
+
+# Local secrets
+.env
+.envrc
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Large assets not needed at runtime
+paper

@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+# Runtime data (do not commit user workspaces, logs, evaluation outputs)
+data/
+logs/
+results/
+evaluation/data/
+*.log

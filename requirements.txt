@@ -1,0 +1,36 @@
+# EvoAgent runtime dependencies.
+#
+# This file mirrors the `[project].dependencies` list in `pyproject.toml` and is
+# kept for consumers that `pip install -r requirements.txt` directly (Docker,
+# CI, quickstart scripts). Keep both files in sync when bumping versions.
+# Upper bounds deliberately lock against known-unstable majors.
+
+# Core
+pydantic>=2.0,<3.0
+python-dotenv>=1.0,<2.0
+loguru>=0.7,<1.0
+
+# FastAPI
+fastapi>=0.110,<1.0
+uvicorn>=0.27,<1.0
+httpx>=0.27,<1.0
+python-multipart>=0.0.9,<1.0
+
+# AI/ML
+openai>=1.50,<2.0
+openai-agents>=0.1,<0.3
+tiktoken>=0.7,<1.0
+tavily-python>=0.3,<1.0
+
+# Server
+gunicorn>=21.0,<24.0
+uvloop>=0.19,<1.0; platform_system != "Windows"
+
+# Utilities
+beautifulsoup4>=4.12,<5.0
+pyyaml>=6.0,<7.0
+json_repair>=0.25,<1.0
+numpy>=1.26,<3.0
+aiohttp>=3.9,<4.0
+html2text>=2024.2,<2026.0
+requests>=2.31,<3.0

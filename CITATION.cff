@@ -1,0 +1,59 @@
+cff-version: 1.2.0
+title: "EvoAgent: An Evolvable Agent Framework with Skill Learning and Multi-Agent Delegation"
+message: "If you use this code, please cite the accompanying paper."
+type: software
+# Author order matches arXiv:2604.20133.
+# Aimin Zhang is the first author and corresponding author.
+authors:
+  - family-names: "Zhang"
+    given-names: "Aimin"
+    affiliation: "Focus Technology Co., Ltd."
+  - family-names: "Guo"
+    given-names: "Jiajing"
+    affiliation: "Focus Technology Co., Ltd."
+  - family-names: "Jia"
+    given-names: "Fuwei"
+    affiliation: "Focus Technology Co., Ltd."
+  - family-names: "Lv"
+    given-names: "Chen"
+    affiliation: "Focus Technology Co., Ltd."
+  - family-names: "Wang"
+    given-names: "Boyu"
+    affiliation: "Focus Technology Co., Ltd."
+  - family-names: "Li"
+    given-names: "Fangzheng"
+    affiliation: "Focus Technology Co., Ltd."
+repository-code: "https://github.com/Focus-AI-Center/Mentarc-EvoAgent"
+url: "https://arxiv.org/abs/2604.20133"
+license: Apache-2.0
+version: "1.0.0-paper"
+date-released: 2026-04-17
+identifiers:
+  - type: other
+    value: "arXiv:2604.20133"
+    description: "arXiv preprint identifier"
+preferred-citation:
+  type: article
+  title: "EvoAgent: An Evolvable Agent Framework with Skill Learning and Multi-Agent Delegation"
+  year: 2026
+  journal: "arXiv preprint arXiv:2604.20133"
+  url: "https://arxiv.org/abs/2604.20133"
+  authors:
+    - family-names: "Zhang"
+      given-names: "Aimin"
+      affiliation: "Focus Technology Co., Ltd."
+    - family-names: "Guo"
+      given-names: "Jiajing"
+      affiliation: "Focus Technology Co., Ltd."
+    - family-names: "Jia"
+      given-names: "Fuwei"
+      affiliation: "Focus Technology Co., Ltd."
+    - family-names: "Lv"
+      given-names: "Chen"
+      affiliation: "Focus Technology Co., Ltd."
+    - family-names: "Wang"
+      given-names: "Boyu"
+      affiliation: "Focus Technology Co., Ltd."
+    - family-names: "Li"
+      given-names: "Fangzheng"
+      affiliation: "Focus Technology Co., Ltd."

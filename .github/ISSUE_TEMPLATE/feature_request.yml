@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a new skill, sub-agent, plugin, or framework capability.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What would you like to see? If you have a concrete design sketch, include it here.
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - New external plugin
+        - New built-in skill
+        - New sub-agent config
+        - Core framework change (agent loop / compressor / matcher)
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

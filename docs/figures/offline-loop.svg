@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600"
+     font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="req2" viewBox="0 0 10 10" refX="10" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#5a6b7f"/>
+    </marker>
+    <marker id="resp2" viewBox="0 0 10 10" refX="10" refY="5"
+            markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1e8a5a"/>
+    </marker>
+  </defs>
+
+  <text x="500" y="30" text-anchor="middle" font-size="17" font-weight="bold" fill="#1a365d">
+    Offline Evolution Loop
+  </text>
+
+  <!-- Row 1: User + UI (trigger + response channel) -->
+  <rect x="40"  y="60" width="110" height="42" rx="8" fill="#f0f4fa" stroke="#4a6ea9" stroke-width="1.5"/>
+  <text x="95"  y="86" text-anchor="middle" fill="#1a365d">User</text>
+
+  <rect x="200" y="60" width="150" height="42" rx="8" fill="#f0f4fa" stroke="#4a6ea9" stroke-width="1.5"/>
+  <text x="275" y="80" text-anchor="middle" fill="#1a365d">Web UI / CLI</text>
+  <text x="275" y="96" text-anchor="middle" fill="#5a6b7f" font-size="11">"Update Profile" button</text>
+
+  <line x1="150" y1="74" x2="197" y2="74" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
+  <text x="173" y="68" text-anchor="middle" fill="#5a6b7f" font-size="10">click</text>
+  <line x1="200" y1="92" x2="153" y2="92" stroke="#1e8a5a" stroke-width="1.5" marker-end="url(#resp2)"/>
+  <text x="173" y="116" text-anchor="middle" fill="#1e8a5a" font-size="10">progress + summary</text>
+
+  <!-- Completed Session + session-reviewer -->
+  <rect x="400" y="60" width="200" height="80" rx="10" fill="#f0f4fa" stroke="#4a6ea9" stroke-width="1.5"/>
+  <text x="500" y="86"  text-anchor="middle" font-weight="bold" fill="#1a365d">Completed Session</text>
+  <text x="500" y="106" text-anchor="middle" fill="#5a6b7f" font-size="11">run_session_update_stream</text>
+  <text x="500" y="124" text-anchor="middle" fill="#5a6b7f" font-size="11">app/api/server.py</text>
+
+  <rect x="670" y="60" width="280" height="80" rx="10" fill="#dbe5f5" stroke="#2b5daf" stroke-width="2"/>
+  <text x="810" y="86"  text-anchor="middle" font-weight="bold" fill="#1a365d">session-reviewer (sub-agent)</text>
+  <text x="810" y="106" text-anchor="middle" fill="#3a5b8a" font-size="11">configs/agents/session-reviewer.md</text>
+  <text x="810" y="124" text-anchor="middle" fill="#3a5b8a" font-size="11">reads transcript · emits update plan</text>
+
+  <!-- UI → Completed Session (POST) and return (SSE) -->
+  <line x1="350" y1="74" x2="397" y2="74" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
+  <text x="373" y="68" text-anchor="middle" fill="#5a6b7f" font-size="10">POST /session/update</text>
+  <line x1="400" y1="92" x2="353" y2="92" stroke="#1e8a5a" stroke-width="1.5" marker-end="url(#resp2)"/>
+  <text x="373" y="116" text-anchor="middle" fill="#1e8a5a" font-size="10">SSE events</text>
+
+  <!-- Completed Session → session-reviewer + return -->
+  <line x1="600" y1="88" x2="667" y2="88" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
+  <text x="633" y="82" text-anchor="middle" fill="#5a6b7f" font-size="10">transcript</text>
+  <line x1="670" y1="110" x2="603" y2="110" stroke="#1e8a5a" stroke-width="1.5" marker-end="url(#resp2)"/>
+  <text x="635" y="124" text-anchor="middle" fill="#1e8a5a" font-size="10">stream events</text>
+
+  <!-- Row 2: three updaters -->
+  <rect x="40"  y="250" width="260" height="110" rx="10" fill="#fdf6e3" stroke="#b58900" stroke-width="1.5"/>
+  <text x="170" y="276" text-anchor="middle" font-weight="bold" fill="#7a5900">User Profile Updater</text>
+  <text x="170" y="296" text-anchor="middle" fill="#7a5900" font-size="11">configs/prompts/USER.md</text>
+  <text x="170" y="316" text-anchor="middle" fill="#7a5900" font-size="11">role · goals · tone</text>
+  <text x="170" y="336" text-anchor="middle" fill="#7a5900" font-size="11">update_profile tool</text>
+
+  <rect x="370" y="250" width="260" height="110" rx="10" fill="#fdf6e3" stroke="#b58900" stroke-width="1.5"/>
+  <text x="500" y="276" text-anchor="middle" font-weight="bold" fill="#7a5900">Long-Term Memory Updater</text>
+  <text x="500" y="296" text-anchor="middle" fill="#7a5900" font-size="11">MEMORY.md + MEMORY_{4 types}.md</text>
+  <text x="500" y="316" text-anchor="middle" fill="#7a5900" font-size="11">user · feedback · project · reference</text>
+  <text x="500" y="336" text-anchor="middle" fill="#7a5900" font-size="11">update_memory: index + details</text>
+
+  <rect x="700" y="250" width="260" height="110" rx="10" fill="#fdf6e3" stroke="#b58900" stroke-width="1.5"/>
+  <text x="830" y="276" text-anchor="middle" font-weight="bold" fill="#7a5900">Skill Evolution</text>
+  <text x="830" y="296" text-anchor="middle" fill="#7a5900" font-size="11">candidate extraction from transcript</text>
+  <text x="830" y="316" text-anchor="middle" fill="#7a5900" font-size="11">maturity scoring · promote on pass</text>
+  <text x="830" y="336" text-anchor="middle" fill="#7a5900" font-size="11">skill_manager tool</text>
+
+  <!-- reviewer → 3 updaters (invoke) -->
+  <line x1="760" y1="140" x2="210" y2="250" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
+  <line x1="810" y1="140" x2="500" y2="250" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
+  <line x1="860" y1="140" x2="810" y2="250" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
+  <text x="540" y="205" fill="#5a6b7f" font-size="10">invoke updater tools (in parallel)</text>
+
+  <!-- updater → reviewer (result events, small green curves) -->
+  <path d="M 230 250 C 300 200, 700 170, 790 144" fill="none"
+        stroke="#1e8a5a" stroke-width="1.2" marker-end="url(#resp2)"/>
+  <path d="M 530 250 C 600 210, 750 170, 800 144" fill="none"
+        stroke="#1e8a5a" stroke-width="1.2" marker-end="url(#resp2)"/>
+  <path d="M 830 250 C 840 220, 840 180, 830 144" fill="none"
+        stroke="#1e8a5a" stroke-width="1.2" marker-end="url(#resp2)"/>
+  <text x="670" y="232" fill="#1e8a5a" font-size="10">tool results</text>
+
+  <!-- Row 3: workspace -->
+  <rect x="160" y="440" width="680" height="70" rx="12" fill="#ede8f5" stroke="#5a4a9e" stroke-width="1.8"/>
+  <text x="500" y="468" text-anchor="middle" font-weight="bold" fill="#3a2a7a">Workspace (per-user)</text>
+  <text x="500" y="490" text-anchor="middle" fill="#5a4a9e" font-size="11">
+    prompts/USER.md · prompts/MEMORY*.md · skills/&lt;skill&gt;/
+  </text>
+
+  <!-- updaters → workspace (persist) -->
+  <line x1="170" y1="360" x2="280" y2="440" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
+  <line x1="500" y1="360" x2="500" y2="440" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
+  <line x1="830" y1="360" x2="720" y2="440" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
+  <text x="400" y="400" fill="#5a6b7f" font-size="10">persist</text>
+
+  <!-- Loop: Workspace → next online turn (dashed green — a “response” to future self) -->
+  <path d="M 160 470 C 40 470, 20 280, 70 140" fill="none"
+        stroke="#1e8a5a" stroke-width="1.5" marker-end="url(#resp2)" stroke-dasharray="5 3"/>
+  <text x="36" y="310" fill="#1e8a5a" font-size="10"
+        transform="rotate(-90, 36, 310)">loaded on next online turn</text>
+
+  <!-- Legend -->
+  <g transform="translate(40, 550)">
+    <rect x="0"   y="0" width="13" height="13" fill="#f0f4fa" stroke="#4a6ea9"/>
+    <text x="19"  y="11" font-size="11" fill="#333">Trigger</text>
+    <rect x="90"  y="0" width="13" height="13" fill="#dbe5f5" stroke="#2b5daf"/>
+    <text x="109" y="11" font-size="11" fill="#333">Reviewer</text>
+    <rect x="190" y="0" width="13" height="13" fill="#fdf6e3" stroke="#b58900"/>
+    <text x="209" y="11" font-size="11" fill="#333">Updater</text>
+    <rect x="280" y="0" width="13" height="13" fill="#ede8f5" stroke="#5a4a9e"/>
+    <text x="299" y="11" font-size="11" fill="#333">Persistence</text>
+
+    <line x1="390" y1="6" x2="420" y2="6" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
+    <text x="425" y="11" font-size="11" fill="#333">request</text>
+    <line x1="490" y1="6" x2="520" y2="6" stroke="#1e8a5a" stroke-width="1.5" marker-end="url(#resp2)"/>
+    <text x="525" y="11" font-size="11" fill="#333">response / stream</text>
+    <line x1="640" y1="6" x2="670" y2="6" stroke="#1e8a5a" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#resp2)"/>
+    <text x="675" y="11" font-size="11" fill="#333">loop-back to next turn</text>
+  </g>
+</svg>

@@ -1,0 +1,117 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evoagent"
+version = "1.0.0"
+description = "An evolvable LLM agent framework with skill learning and multi-agent delegation"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+keywords = [
+    "llm",
+    "agent",
+    "harness-engineering",
+    "skill-learning",
+    "multi-agent",
+    "openai-agents-sdk",
+]
+authors = [
+    { name = "Aimin Zhang" },
+    { name = "Jiajing Guo" },
+    { name = "Fuwei Jia" },
+    { name = "Chen Lv" },
+    { name = "Boyu Wang" },
+    { name = "Fangzheng Li" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Runtime dependencies. Upper bounds lock against known-unstable major releases
+# (openai, openai-agents) while allowing bug-fix bumps.
+dependencies = [
+    "pydantic>=2.0,<3.0",
+    "python-dotenv>=1.0,<2.0",
+    "loguru>=0.7,<1.0",
+
+    "fastapi>=0.110,<1.0",
+    "uvicorn>=0.27,<1.0",
+    "httpx>=0.27,<1.0",
+    "python-multipart>=0.0.9,<1.0",
+
+    "openai>=1.50,<2.0",
+    "openai-agents>=0.1,<0.3",
+    "tiktoken>=0.7,<1.0",
+    "tavily-python>=0.3,<1.0",
+
+    "gunicorn>=21.0,<24.0",
+    "uvloop>=0.19,<1.0; platform_system != 'Windows'",
+
+    "beautifulsoup4>=4.12,<5.0",
+    "pyyaml>=6.0,<7.0",
+    "json-repair>=0.25,<1.0",
+    "numpy>=1.26,<3.0",
+    "aiohttp>=3.9,<4.0",
+    "html2text>=2024.2,<2026.0",
+    "requests>=2.31,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.4,<1.0",
+    "pre-commit>=3.7,<5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Focus-AI-Center/Mentarc-EvoAgent"
+Repository = "https://github.com/Focus-AI-Center/Mentarc-EvoAgent"
+
+[project.scripts]
+evoagent-server = "app.api.server:main"
+evoagent-cli = "cli:run"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*", "core*", "configs*", "utils*"]
+exclude = ["tests*", "evaluation*"]
+
+[tool.setuptools.package-data]
+configs = ["prompts/*.md", "skills/**/*.md", "agents/*.md"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = [
+    "data",
+    "logs",
+    "evaluation/results",
+    "app/static",
+]
+
+[tool.ruff.lint]
+# Keep the ruleset loose on a research codebase. Tighten later.
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes (undefined names, unused imports — always worth catching)
+    "I",   # isort
+    "UP",  # pyupgrade (modern syntax)
+    "B",   # flake8-bugbear (common pitfalls)
+]
+ignore = [
+    "E501",  # line too long — we use line-length=110 but don't enforce hard
+    "B008",  # function-call-in-default-arg (FastAPI uses Depends/Field patterns)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"configs/settings.py" = ["F401"]
+"core/plugins/__init__.py" = ["F401"]
+"utils/__init__.py" = ["F401"]
