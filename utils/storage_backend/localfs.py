@@ -110,7 +110,16 @@ class LocalFSBackend:
         return results
 
     def _delete_sync(self, key_or_prefix: str) -> int:
-        p = self._resolve(key_or_prefix)
+        # Tolerate the conventional trailing-slash form for prefixes
+        # (``"{user_id}/skills/foo/"``); ``_resolve`` would otherwise reject the
+        # empty trailing segment. Doesn't change semantics for exact-key form.
+        normalized = key_or_prefix.rstrip("/").rstrip("\\")
+        if not normalized:
+            return 0
+        try:
+            p = self._resolve(normalized)
+        except ValueError:
+            return 0
         if p.is_file():
             p.unlink()
             return 1
@@ -129,6 +138,35 @@ class LocalFSBackend:
             return _md5_hex(p.read_bytes())
         except FileNotFoundError:
             return None
+
+    # ── sync StorageBackend interface ────────────────────────────────────
+    # Used by ``utils/workspace.py`` (synchronous public API). The async
+    # counterparts below trampoline through these via ``asyncio.to_thread``.
+
+    def read_bytes_sync(self, key: str) -> bytes:
+        return self._read_bytes_sync(key)
+
+    def read_text_sync(self, key: str) -> str:
+        return self._read_bytes_sync(key).decode("utf-8")
+
+    def write_bytes_sync(
+        self, key: str, data: bytes, *, if_match: str | None = None
+    ) -> str:
+        return self._write_bytes_sync(key, data, if_match)
+
+    def write_text_sync(
+        self, key: str, content: str, *, if_match: str | None = None
+    ) -> str:
+        return self._write_bytes_sync(key, content.encode("utf-8"), if_match)
+
+    def list_keys_sync(self, prefix: str) -> list[str]:
+        return self._list_keys_sync(prefix)
+
+    def delete_sync(self, key_or_prefix: str) -> int:
+        return self._delete_sync(key_or_prefix)
+
+    def head_etag_sync(self, key: str) -> str | None:
+        return self._head_etag_sync(key)
 
     # ── async StorageBackend interface ───────────────────────────────────
 

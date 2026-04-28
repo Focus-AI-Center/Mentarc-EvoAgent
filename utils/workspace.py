@@ -1,31 +1,43 @@
-"""Per-user workspace backed by local filesystem.
+"""Per-user workspace backed by a pluggable ``StorageBackend``.
 
-Each user gets an isolated directory: {WORKSPACE_ROOT}/{user_id}/
-containing prompts, skills, sessions, images, and previews.
+Each user gets an isolated key-prefix: ``{user_id}/...`` containing
+prompts, skills, sessions, images, and previews. Two backends are wired up
+(see ``utils/storage_backend/__init__.py``):
 
-On first access the workspace is initialized by copying default prompts
-from configs/prompts/ and default skills from configs/skills/.
+  - ``LocalFSBackend``  → keys map 1:1 to files under ``WORKSPACE_ROOT``
+  - ``MinIOSDKBackend`` → keys map 1:1 to objects in the MinIO bucket
+
+The public ``Workspace`` API is intentionally synchronous to keep the many
+existing call sites unchanged. Each method delegates to the backend's
+``*_sync`` methods (one network round-trip per op for MinIO, ~µs for LocalFS).
+Async fan-out (``asyncio.gather`` over the prompt-loading chain) is layered
+on top via ``read_text_async`` for the few hot paths that benefit.
+
+On first access the workspace is initialized by copying the platform-owned
+templates from ``DEFAULT_PROMPTS_DIR`` and ``DEFAULT_SKILLS_DIR`` (still on
+the server's local filesystem — they're packaged with the deployment) into
+the user's prefix. ``SOUL.md`` is force-overwritten on every sync; user
+files (``MEMORY.md`` etc.) are only seeded on first access.
 """
 
 import base64
 import hashlib
 import json
 import re
-import shutil
 from pathlib import Path
 
 from configs.settings import (
     DEFAULT_PROMPTS_DIR,
     DEFAULT_SKILLS_DIR,
-    WORKSPACE_ROOT,
 )
+from utils.storage_backend import KeyNotFoundError, StorageBackend, get_backend
 
 _DEFAULTS_DIR = Path(DEFAULT_PROMPTS_DIR)
 _DEFAULTS_SKILLS_DIR = Path(DEFAULT_SKILLS_DIR)
 
 
 def _compute_sync_version() -> str:
-    """Compute a version hash from local configs (prompts + skills)."""
+    """Hash of platform-owned templates. Used to gate per-user re-sync."""
     parts: list[str] = []
     soul = _DEFAULTS_DIR / "SOUL.md"
     if soul.exists():
@@ -35,15 +47,19 @@ def _compute_sync_version() -> str:
         for f in sorted(_DEFAULTS_SKILLS_DIR.rglob("*")):
             if f.is_file():
                 st = f.stat()
-                parts.append(f"{f.relative_to(_DEFAULTS_SKILLS_DIR)}:{st.st_mtime_ns}:{st.st_size}")
+                parts.append(
+                    f"{f.relative_to(_DEFAULTS_SKILLS_DIR)}:{st.st_mtime_ns}:{st.st_size}"
+                )
     return hashlib.md5("\n".join(parts).encode()).hexdigest() if parts else ""
 
 
 _SYNC_VERSION: str = _compute_sync_version()
 
 
-def _scan_skill_dirs(base_dir: Path, prefix: str = "") -> list[tuple[str, Path, list[tuple[str, Path]]]]:
-    """Recursively scan for skills in a directory tree."""
+def _scan_skill_dirs(
+    base_dir: Path, prefix: str = ""
+) -> list[tuple[str, Path, list[tuple[str, Path]]]]:
+    """Recursively scan a template tree for skills + their reference files."""
     results: list[tuple[str, Path, list[tuple[str, Path]]]] = []
     if not base_dir.exists():
         return results
@@ -68,7 +84,9 @@ def _scan_skill_dirs(base_dir: Path, prefix: str = "") -> list[tuple[str, Path, 
         base_name = yaml_name or dir_name
         skill_name = f"{prefix}/{base_name}" if prefix else base_name
         sub_skill_dirs = {
-            child.name for child in entry.iterdir() if child.is_dir() and (child / "SKILL.md").exists()
+            child.name
+            for child in entry.iterdir()
+            if child.is_dir() and (child / "SKILL.md").exists()
         }
         ref_files: list[tuple[str, Path]] = []
         for f in sorted(entry.rglob("*")):
@@ -83,213 +101,229 @@ def _scan_skill_dirs(base_dir: Path, prefix: str = "") -> list[tuple[str, Path, 
     return results
 
 
-class Workspace:
-    """Local filesystem per-user workspace."""
+def _validate_segment(segment: str, *, allow_slash: bool = False) -> None:
+    """Reject path-traversal in user-supplied name segments.
 
-    def __init__(self, user_id: str):
+    ``allow_slash=True`` permits nested skill names like ``parent/child`` while
+    still rejecting ``..``, leading slashes, and empty parts.
+    """
+    if not segment:
+        raise ValueError("Empty path segment")
+    if segment.startswith("/") or segment.startswith("\\"):
+        raise ValueError(f"Absolute segment not allowed: {segment!r}")
+    parts = segment.replace("\\", "/").split("/")
+    if not allow_slash and len(parts) > 1:
+        raise ValueError(f"Slash not allowed in this segment: {segment!r}")
+    for p in parts:
+        if p in ("", ".", ".."):
+            raise ValueError(f"Invalid segment {p!r} in {segment!r}")
+
+
+class Workspace:
+    """Per-user workspace, keys prefixed with ``{user_id}/``."""
+
+    def __init__(self, user_id: str, backend: StorageBackend | None = None):
+        if not user_id or "/" in user_id or user_id in (".", ".."):
+            raise ValueError(f"Invalid user_id: {user_id!r}")
         self.user_id = user_id
-        self.root = Path(WORKSPACE_ROOT).resolve() / user_id
-        self.prompts_dir = self.root / "prompts"
-        self.skills_dir = self.root / "skills"
-        self.sessions_dir = self.root / "sessions"
-        self.images_dir = self.root / "images"
-        self.previews_dir = self.root / "previews"
-        self.meta_dir = self.root / ".meta"
-        self._ensure_dirs()
+        self._backend = backend if backend is not None else get_backend()
         self._init_workspace()
 
-    def _ensure_dirs(self) -> None:
-        for path in (
-            self.root,
-            self.prompts_dir,
-            self.skills_dir,
-            self.sessions_dir,
-            self.images_dir,
-            self.previews_dir,
-            self.meta_dir,
-        ):
-            path.mkdir(parents=True, exist_ok=True)
+    # ── key helpers ──────────────────────────────────────────────────────
 
-    def _safe_join(self, *parts: str) -> Path:
-        """Join ``parts`` under ``self.root`` and verify the result stays confined
-        to the subtree indicated by ``parts[0]`` (prompts/skills/sessions/…).
+    def _key(self, *parts: str) -> str:
+        """Build ``{user_id}/<parts>``; raise on traversal attempts in parts.
 
-        Guards every public method that accepts user-controlled names against
-        path traversal via ``..`` or absolute segments. The check is stronger
-        than "under user root" — it also rejects cross-bucket escapes (e.g.
-        a skill-ref filename that climbs out of ``skills/`` into ``.meta/``).
-
-        ``Path.resolve()`` runs without ``strict=True`` so the target need not
-        exist yet (matters for writes). No public method here creates symlinks,
-        so a malicious one would require shell-level access to plant.
-
-        Raises ``ValueError`` on escape; propagates to the caller.
+        The first part is one of ``prompts/skills/sessions/images/previews/.meta``
+        and is always supplied by us — only the remaining parts come from the
+        caller, so we validate those.
         """
         if not parts:
-            raise ValueError("_safe_join requires at least one part")
-        base = (self.root / parts[0]).resolve()
-        resolved = self.root.joinpath(*parts).resolve()
+            raise ValueError("_key requires at least one part")
+        # First part is always trusted (one of our subdirs).
+        out = [self.user_id, parts[0]]
+        for p in parts[1:]:
+            _validate_segment(
+                p, allow_slash=parts[0] in ("skills", "previews", "sessions", "images")
+            )
+            out.append(p)
+        return "/".join(out)
+
+    def _user_prefix(self) -> str:
+        return f"{self.user_id}/"
+
+    # ── primitive read / write through backend ───────────────────────────
+
+    def _read_text(self, key: str) -> str:
         try:
-            resolved.relative_to(base)
-        except ValueError as err:
-            raise ValueError(f"Path escapes intended subtree {parts[0]!r}: {parts!r}") from err
-        return resolved
-
-    # ── File helpers ─────────────────────────────────────────────────────
-
-    @staticmethod
-    def _text_read(path: Path) -> str:
-        if not path.exists():
+            return self._backend.read_text_sync(key)
+        except KeyNotFoundError:
             return ""
+
+    def _write_text(self, key: str, content: str) -> None:
+        self._backend.write_text_sync(key, content)
+
+    def _read_bytes(self, key: str) -> bytes | None:
         try:
-            return path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return ""
+            return self._backend.read_bytes_sync(key)
+        except KeyNotFoundError:
+            return None
 
-    @staticmethod
-    def _text_write(path: Path, content: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(content, encoding="utf-8")
-        tmp.replace(path)
+    def _write_bytes(self, key: str, data: bytes) -> None:
+        self._backend.write_bytes_sync(key, data)
 
-    @staticmethod
-    def _json_read(path: Path, default=None):
-        if not path.exists():
+    def _read_json(self, key: str, default=None):
+        try:
+            raw = self._backend.read_text_sync(key)
+        except KeyNotFoundError:
             return default
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return default
 
-    @staticmethod
-    def _json_write(path: Path, data) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
+    def _write_json(self, key: str, data) -> None:
+        self._backend.write_text_sync(
+            key, json.dumps(data, ensure_ascii=False, indent=2)
+        )
 
-    @staticmethod
-    def _bytes_write(path: Path, data: bytes) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(path)
+    def _exists(self, key: str) -> bool:
+        return self._backend.head_etag_sync(key) is not None
+
+    def _delete(self, key_or_prefix: str) -> int:
+        return self._backend.delete_sync(key_or_prefix)
+
+    def _list(self, prefix: str) -> list[str]:
+        return self._backend.list_keys_sync(prefix)
 
     # ── Init ─────────────────────────────────────────────────────────────
 
     def _init_workspace(self) -> None:
-        """Copy default prompts and builtin skills on first access."""
-        version_file = self.meta_dir / "sync_version"
-        stored = self._text_read(version_file).strip()
+        """Seed default prompts + builtin skills if not already at current version."""
+        version_key = self._key(".meta", "sync_version")
+        stored = self._read_text(version_key).strip()
         if stored == _SYNC_VERSION:
-            return  # Already synced
+            return
 
-        # Copy default prompts (only if not exist)
         if _DEFAULTS_DIR.exists():
             for md in _DEFAULTS_DIR.glob("*.md"):
-                target = self.prompts_dir / md.name
-                if not target.exists():
-                    target.write_text(md.read_text(encoding="utf-8"), encoding="utf-8")
+                target = self._key("prompts", md.name)
+                # SOUL.md is platform-owned: always overwrite.
+                # Others: only seed if missing (preserve user edits).
+                if md.name == "SOUL.md" or not self._exists(target):
+                    self._write_text(
+                        target, md.read_text(encoding="utf-8")
+                    )
 
-            # Always overwrite SOUL.md with latest
-            soul = _DEFAULTS_DIR / "SOUL.md"
-            if soul.exists():
-                self._text_write(self.prompts_dir / "SOUL.md", soul.read_text(encoding="utf-8"))
-
-        # Sync builtin skills
         self.sync_builtin_skills()
-
-        # Mark as synced
-        self._text_write(version_file, _SYNC_VERSION)
+        self._write_text(version_key, _SYNC_VERSION)
 
     # ── Prompts ──────────────────────────────────────────────────────────
 
     def read_prompt(self, name: str) -> str:
-        return self._text_read(self._safe_join("prompts", f"{name}.md"))
+        _validate_segment(name)
+        return self._read_text(self._key("prompts", f"{name}.md"))
 
     def write_prompt(self, name: str, content: str) -> None:
-        self._text_write(self._safe_join("prompts", f"{name}.md"), content)
+        _validate_segment(name)
+        self._write_text(self._key("prompts", f"{name}.md"), content)
 
     def list_prompts(self) -> list[str]:
         names = set()
         if _DEFAULTS_DIR.exists():
             names.update(md.stem for md in _DEFAULTS_DIR.glob("*.md"))
-        names.update(md.stem for md in self.prompts_dir.glob("*.md"))
+        for k in self._list(f"{self.user_id}/prompts/"):
+            tail = k[len(f"{self.user_id}/prompts/") :]
+            if tail.endswith(".md") and "/" not in tail:
+                names.add(tail[: -len(".md")])
         return sorted(names)
 
     # ── Skills ───────────────────────────────────────────────────────────
 
     def skill_set(self, name: str, value: str) -> None:
-        self._text_write(self._safe_join("skills", name, "SKILL.md"), value)
+        self._write_text(self._key("skills", name, "SKILL.md"), value)
 
     def skill_get(self, name: str) -> str | None:
-        path = self._safe_join("skills", name, "SKILL.md")
-        if not path.exists():
+        key = self._key("skills", name, "SKILL.md")
+        if not self._exists(key):
             return None
         try:
-            return path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            return self._backend.read_text_sync(key)
+        except KeyNotFoundError:
             return None
 
     def skill_get_all(self) -> dict[str, str]:
-        result = {}
-        for skill_file in self.skills_dir.rglob("SKILL.md"):
-            rel = skill_file.parent.relative_to(self.skills_dir).as_posix()
-            content = self.skill_get(rel)
-            if content is not None:
-                result[rel] = content
+        result: dict[str, str] = {}
+        prefix = f"{self.user_id}/skills/"
+        for k in self._list(prefix):
+            tail = k[len(prefix) :]
+            if not tail.endswith("/SKILL.md"):
+                continue
+            name = tail[: -len("/SKILL.md")]
+            try:
+                result[name] = self._backend.read_text_sync(k)
+            except KeyNotFoundError:
+                continue
         return result
 
     def skill_del(self, name: str) -> bool:
-        skill_dir = self._safe_join("skills", name)
-        if not skill_dir.exists():
+        prefix = self._key("skills", name) + "/"
+        # Use list+delete-prefix semantics; backend.delete handles recursion.
+        if not self._list(prefix):
             return False
-        shutil.rmtree(skill_dir, ignore_errors=True)
+        self._delete(prefix)
         return True
 
     def skill_refs_get(self, name: str) -> dict[str, str]:
         refs: dict[str, str] = {}
-        refs_dir = self._safe_join("skills", name, "references")
-        if not refs_dir.exists():
-            return refs
-        for ref_file in refs_dir.rglob("*"):
-            if ref_file.is_file():
-                try:
-                    refs[ref_file.relative_to(refs_dir).as_posix()] = ref_file.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
-                    pass
+        prefix = self._key("skills", name, "references") + "/"
+        for k in self._list(prefix):
+            rel = k[len(prefix) :]
+            if not rel:
+                continue
+            try:
+                refs[rel] = self._backend.read_text_sync(k)
+            except KeyNotFoundError:
+                pass
         return refs
 
     def skill_ref_set(self, name: str, filename: str, content: str) -> None:
-        self._text_write(self._safe_join("skills", name, "references", filename), content)
+        # filename can be nested under references/, e.g. "deep/file.md".
+        _validate_segment(filename, allow_slash=True)
+        key = self._key("skills", name, "references") + "/" + filename
+        self._write_text(key, content)
 
     def skill_ref_del(self, name: str, filename: str) -> bool:
-        path = self._safe_join("skills", name, "references", filename)
-        if not path.exists():
+        _validate_segment(filename, allow_slash=True)
+        key = self._key("skills", name, "references") + "/" + filename
+        if not self._exists(key):
             return False
-        path.unlink()
+        self._delete(key)
         return True
 
     # ── Sessions ─────────────────────────────────────────────────────────
 
     def history_load(self, session_id: str) -> dict | None:
-        return self._json_read(self._safe_join("sessions", f"{session_id}.json"))
+        return self._read_json(self._key("sessions", f"{session_id}.json"))
 
     def history_save(self, session_id: str, data: dict) -> None:
-        self._json_write(self._safe_join("sessions", f"{session_id}.json"), data)
+        self._write_json(self._key("sessions", f"{session_id}.json"), data)
 
     def history_del(self, session_id: str) -> bool:
-        path = self._safe_join("sessions", f"{session_id}.json")
-        if not path.exists():
+        key = self._key("sessions", f"{session_id}.json")
+        if not self._exists(key):
             return False
-        path.unlink()
+        self._delete(key)
         return True
 
     def list_sessions(self) -> list[dict]:
         result = []
-        for path in self.sessions_dir.glob("*.json"):
-            data = self._json_read(path)
+        prefix = f"{self.user_id}/sessions/"
+        for k in self._list(prefix):
+            tail = k[len(prefix) :]
+            if not tail.endswith(".json") or "/" in tail:
+                continue
+            data = self._read_json(k)
             if not isinstance(data, dict):
                 continue
             preview = ""
@@ -299,7 +333,7 @@ class Workspace:
                     break
             result.append(
                 {
-                    "session_id": path.stem,
+                    "session_id": tail[: -len(".json")],
                     "timestamp": data.get("timestamp", ""),
                     "message_count": data.get("message_count", 0),
                     "preview": preview,
@@ -308,18 +342,26 @@ class Workspace:
         return sorted(result, key=lambda s: s.get("timestamp", ""), reverse=True)
 
     def clear_sessions(self) -> int:
-        sessions = list(self.sessions_dir.glob("*.json"))
-        for p in sessions:
-            p.unlink(missing_ok=True)
-        return len(sessions)
+        prefix = f"{self.user_id}/sessions/"
+        keys = self._list(prefix)
+        if keys:
+            self._delete(prefix)
+        return len(keys)
 
     # ── Skills bulk ──────────────────────────────────────────────────────
 
     def clear_skills(self) -> int:
-        dirs = [p for p in self.skills_dir.iterdir() if p.is_dir()]
-        for p in dirs:
-            shutil.rmtree(p, ignore_errors=True)
-        return len(dirs)
+        prefix = f"{self.user_id}/skills/"
+        # Count distinct top-level skill dirs (legacy semantics: number of
+        # skill directories removed, not number of files).
+        skill_dirs: set[str] = set()
+        for k in self._list(prefix):
+            tail = k[len(prefix) :]
+            if "/" in tail:
+                skill_dirs.add(tail.split("/", 1)[0])
+        if skill_dirs:
+            self._delete(prefix)
+        return len(skill_dirs)
 
     def clear_all(self) -> dict:
         return {"sessions": self.clear_sessions(), "skills": self.clear_skills()}
@@ -330,15 +372,17 @@ class Workspace:
             "skills": self.clear_skills(),
             "images": self.clear_images(),
             "previews": self.clear_previews(),
-            "prompts": len(list(self.prompts_dir.glob("*.md"))),
+            "prompts": sum(
+                1
+                for k in self._list(f"{self.user_id}/prompts/")
+                if k.endswith(".md")
+            ),
         }
-        if self.root.exists():
-            shutil.rmtree(self.root, ignore_errors=True)
+        self._delete(self._user_prefix())
         return cleared
 
     def reset_to_defaults(self) -> dict:
         cleared = self.delete_workspace()
-        self._ensure_dirs()
         self._init_workspace()
         return cleared
 
@@ -347,17 +391,19 @@ class Workspace:
         existing = set(self.skill_get_all())
         for skill_name, skill_file, ref_files in _scan_skill_dirs(_DEFAULTS_SKILLS_DIR):
             self.skill_set(skill_name, skill_file.read_text(encoding="utf-8"))
-            # Clear and re-sync references
-            refs_dir = self.skills_dir / skill_name / "references"
-            if refs_dir.exists():
-                shutil.rmtree(refs_dir, ignore_errors=True)
+            # Wipe and re-sync references.
+            refs_prefix = self._key("skills", skill_name, "references") + "/"
+            self._delete(refs_prefix)
             for rel, file_path in ref_files:
-                # skill_ref_set already writes under "references/"; strip any
-                # leading "references/" from the scanned relative path so we
-                # don't end up at skills/{name}/references/references/...
-                norm = rel[len("references/") :] if rel.startswith("references/") else rel
+                norm = (
+                    rel[len("references/") :]
+                    if rel.startswith("references/")
+                    else rel
+                )
                 try:
-                    self.skill_ref_set(skill_name, norm, file_path.read_text(encoding="utf-8"))
+                    self.skill_ref_set(
+                        skill_name, norm, file_path.read_text(encoding="utf-8")
+                    )
                 except (OSError, UnicodeDecodeError):
                     pass
             if skill_name in existing:
@@ -369,69 +415,81 @@ class Workspace:
     # ── Images ───────────────────────────────────────────────────────────
 
     def image_write(self, filename: str, data: bytes) -> bool:
-        self._bytes_write(self._safe_join("images", filename), data)
+        self._write_bytes(self._key("images", filename), data)
         return True
 
     def image_read(self, filename: str) -> bytes | None:
-        path = self._safe_join("images", filename)
-        if not path.exists():
-            return None
-        try:
-            return path.read_bytes()
-        except OSError:
-            return None
+        return self._read_bytes(self._key("images", filename))
 
     def image_list(self) -> list[str]:
-        return sorted(p.name for p in self.images_dir.iterdir() if p.is_file())
+        prefix = f"{self.user_id}/images/"
+        out: list[str] = []
+        for k in self._list(prefix):
+            tail = k[len(prefix) :]
+            if "/" not in tail:
+                out.append(tail)
+        return sorted(out)
 
     def image_del(self, filename: str) -> bool:
-        path = self._safe_join("images", filename)
-        if not path.exists():
+        key = self._key("images", filename)
+        if not self._exists(key):
             return False
-        path.unlink()
+        self._delete(key)
         return True
 
     def clear_images(self) -> int:
-        files = [p for p in self.images_dir.iterdir() if p.is_file()]
-        for p in files:
-            p.unlink()
-        return len(files)
+        names = self.image_list()
+        if names:
+            for n in names:
+                self._delete(self._key("images", n))
+        return len(names)
 
     # ── Previews ─────────────────────────────────────────────────────────
 
     def preview_write(self, preview_id: str, html: str) -> bool:
-        self._text_write(self._safe_join("previews", f"{preview_id}.html"), html)
+        self._write_text(self._key("previews", f"{preview_id}.html"), html)
         return True
 
     def preview_read(self, preview_id: str) -> str | None:
-        path = self._safe_join("previews", f"{preview_id}.html")
-        if not path.exists():
+        key = self._key("previews", f"{preview_id}.html")
+        if not self._exists(key):
             return None
         try:
-            return path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            return self._backend.read_text_sync(key)
+        except KeyNotFoundError:
             return None
 
     def preview_list(self) -> list[str]:
-        return sorted(p.stem for p in self.previews_dir.glob("*.html"))
+        prefix = f"{self.user_id}/previews/"
+        out: list[str] = []
+        for k in self._list(prefix):
+            tail = k[len(prefix) :]
+            if tail.endswith(".html") and "/" not in tail:
+                out.append(tail[: -len(".html")])
+        return sorted(out)
 
     def preview_del(self, preview_id: str) -> bool:
-        path = self._safe_join("previews", f"{preview_id}.html")
-        if not path.exists():
+        key = self._key("previews", f"{preview_id}.html")
+        if not self._exists(key):
             return False
-        path.unlink()
+        self._delete(key)
         return True
 
     def clear_previews(self) -> int:
-        files = list(self.previews_dir.glob("*.html"))
-        for p in files:
-            p.unlink()
-        return len(files)
+        ids = self.preview_list()
+        if ids:
+            for pid in ids:
+                self._delete(self._key("previews", f"{pid}.html"))
+        return len(ids)
 
     # ── Snapshot ─────────────────────────────────────────────────────────
 
     def export_snapshot(self) -> dict:
-        prompts = {name: self.read_prompt(name) for name in self.list_prompts() if self.read_prompt(name)}
+        prompts = {
+            name: self.read_prompt(name)
+            for name in self.list_prompts()
+            if self.read_prompt(name)
+        }
         skills = {}
         for name, content in self.skill_get_all().items():
             skills[name] = {"content": content, "refs": self.skill_refs_get(name)}
@@ -475,13 +533,17 @@ class Workspace:
                 for ref_name, ref_content in (payload.get("refs") or {}).items():
                     if isinstance(ref_name, str) and isinstance(ref_content, str):
                         self.skill_ref_set(skill_name, ref_name, ref_content)
-        for sid, record in (snapshot.get("sessions", {}).get("records") or {}).items():
+        for sid, record in (
+            snapshot.get("sessions", {}).get("records") or {}
+        ).items():
             if isinstance(sid, str) and isinstance(record, dict):
                 self.history_save(sid, record)
         for filename, b64_data in (snapshot.get("images") or {}).items():
             if isinstance(filename, str) and isinstance(b64_data, str):
                 try:
-                    self.image_write(filename, base64.b64decode(b64_data.encode("ascii")))
+                    self.image_write(
+                        filename, base64.b64decode(b64_data.encode("ascii"))
+                    )
                 except ValueError:
                     pass
         for preview_id, html in (snapshot.get("previews") or {}).items():

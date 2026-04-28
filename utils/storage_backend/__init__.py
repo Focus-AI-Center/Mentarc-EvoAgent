@@ -96,6 +96,28 @@ class StorageBackend(Protocol):
         """Return ETag if key exists, ``None`` otherwise."""
 
 
+_BACKEND_SINGLETON: StorageBackend | None = None
+
+
+def get_backend() -> StorageBackend:
+    """Process-wide ``StorageBackend`` singleton.
+
+    Lazy-initialised on first call (so importing this module on a host without
+    MinIO config does not fail). Subsequent calls return the same instance —
+    the SDK manages its own connection pool so a singleton is the right scope.
+    """
+    global _BACKEND_SINGLETON
+    if _BACKEND_SINGLETON is None:
+        _BACKEND_SINGLETON = make_backend()
+    return _BACKEND_SINGLETON
+
+
+def reset_backend() -> None:
+    """Drop the cached singleton. For tests that need to re-read env vars."""
+    global _BACKEND_SINGLETON
+    _BACKEND_SINGLETON = None
+
+
 def make_backend() -> StorageBackend:
     """Factory: pick the backend based on environment.
 
@@ -131,5 +153,7 @@ __all__ = [
     "KeyNotFoundError",
     "StorageBackend",
     "StorageError",
+    "get_backend",
     "make_backend",
+    "reset_backend",
 ]

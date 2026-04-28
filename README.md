@@ -15,35 +15,30 @@ Official implementation of **"EvoAgent: An Evolvable Agent Framework with Skill 
 > history compressor · 4-type memory · offline evolution loop) and is sufficient to reproduce the methodology; absolute numbers from the paper's foreign-trade
 > deployment, however, require the internal corpus and skill library and cannot be reproduced from this repo alone.
 
-> **🧨 Runtime safety notice.** The built-in tools that touch the filesystem
-> and the shell — `execute_code` (bash / Python), `skill_manager` reference
-> writes, and the per-user `workspace` directory — currently run **directly
-> inside the server process** with only CWD confinement and a small regex
-> blacklist. This is acceptable for a single-tenant research deployment and
-> is what the paper's evaluations were run under, **but it is not safe to
-> expose to untrusted users or the public internet as-is**.
+> **🧨 Runtime safety notice.** The repo ships **two deployment modes**, picked
+> at startup by whether `MINIO_ENDPOINT` is set:
 >
-> **About the shipped bubblewrap integration.** `core/plugins/execute_code.py`
-> contains a `bwrap` wrapper path (auto-activates on Linux when `bwrap` is
-> installed) that bind-mounts the user workspace into a per-invocation
-> sandbox and applies `prlimit`. **This path has not been field-tested in a
-> real production deployment** — we develop / run the paper inside a Docker
-> container whose default seccomp profile blocks the `unshare()` syscall
-> bwrap needs, so bwrap has effectively been disabled (`.env`
-> `EXECUTE_CODE_SANDBOX=off`) in our own environment. The code is provided
-> as a starting point; validate it on your own host before relying on it.
+> - **LOCAL mode** (default, no `MINIO_ENDPOINT`). Workspace data lives on the
+>   server's local disk under `data/workspace/{user_id}/`. `execute_code`
+>   runs through the bubblewrap fallback in `core/plugins/sandbox/local.py`
+>   (or a plain `subprocess` if `bwrap` isn't installed). **The bwrap path
+>   has not been field-tested in production** — it is shipped as reference
+>   code; validate on your own host before trusting it. Use this mode for
+>   single-machine research / paper reproduction only.
 >
-> **For any deployment beyond single-tenant trusted research, use a remote
-> cloud sandbox instead.** Services like [E2B](https://e2b.dev),
-> [Modal](https://modal.com), [Daytona](https://daytona.io), or a managed
-> gVisor / Firecracker runtime offload the execution entirely and have been
-> battle-tested at scale. Wire them into `execute_code` as a new backend
-> (parallel to the current `bwrap` / `subprocess` branches) — the tool's
-> JSON contract stays the same; only the transport changes.
+> - **MINIO mode** (set `MINIO_ENDPOINT`). Workspace data lives in a MinIO
+>   bucket; `execute_code` runs in a one-shot Docker container on a
+>   *separate* sandbox host that mounts the bucket via s3fs (see
+>   [`core/plugins/sandbox/remote_docker.py`](core/plugins/sandbox/remote_docker.py)).
+>   Storage and the sandbox runtime are decoupled from the server process,
+>   so the server can be restarted / scaled and a sandbox escape can only
+>   reach that user's bucket prefix. This is the recommended path for any
+>   deployment with persistence requirements or more than one trusted user.
 >
-> See [SECURITY.md §1](SECURITY.md) for the full caveat list and the
-> `TODO(sandbox)` block at the top of
-> [`core/plugins/execute_code.py`](core/plugins/execute_code.py).
+> Both modes still keep `execute_code` behind the same regex blacklist /
+> timeout / output truncation; the difference is **where** the code runs
+> and **what it can reach**. See [Deployment Modes](#deployment-modes) below
+> for setup, and [SECURITY.md § 1](SECURITY.md) for the full caveat list.
 
 ---
 
@@ -96,6 +91,125 @@ python -m app.api.server             # launches FastAPI server on :8194
 python cli.py --user demo            # interactive CLI
 ```
 
+The default `.env.example` has `MINIO_ENDPOINT` empty, which gives you the
+**LOCAL** mode (workspaces in `data/workspace/`, `execute_code` via bwrap
+fallback). For multi-user / persistent / hardened deployments, switch to
+**MINIO** mode — see the next section.
+
+## Deployment Modes
+
+| | **LOCAL** (default) | **MINIO** (recommended for >1 user) |
+|---|---|---|
+| Trigger | `MINIO_ENDPOINT` empty | `MINIO_ENDPOINT` set |
+| Storage backend | `LocalFSBackend` (`data/workspace/{user_id}/`) | `MinIOSDKBackend` (S3 keys `{user_id}/...`) |
+| Sandbox backend | `LocalBwrapBackend` (bwrap or subprocess) | `RemoteDockerBackend` (one-shot container on a separate host) |
+| Workspace ↔ sandbox | rw-bind mount on the same host | s3fs mount of the MinIO bucket inside the container |
+| Server can be restarted/scaled? | No (state on local disk) | Yes (state in MinIO) |
+| Cross-mode configs | rejected at startup (`make_sandbox_backend` / `get_backend`) | |
+
+### Deploy MinIO
+
+We do not bundle a MinIO deployment manifest. Use any release that supports
+versioning + STS — single-node `minio:latest` is enough for development;
+4-node distributed StatefulSet with EC:2 is recommended for production. See
+the [official MinIO docs](https://min.io/docs).
+
+Once it's up, create a bucket (default name in `.env.example`:
+`evoagent-workspaces`) and copy its endpoint URL + access/secret keys.
+The server will create the per-user prefixes (`{user_id}/prompts/...`,
+`/skills/`, `/sessions/`, `/images/`, `/previews/`) on first interaction.
+
+### Deploy the remote sandbox host (MINIO mode only)
+
+Any Linux box with Docker, `/dev/fuse`, and network access to the MinIO
+endpoint. We've tested on Alibaba Cloud Linux 3 / kernel 5.10; any
+distribution with kernel ≥ 4.18 and Docker ≥ 20.10 should work.
+
+```bash
+# 1. On the sandbox host: install Docker if needed
+curl -fsSL https://get.docker.com | sh
+docker --version                 # >= 20.10
+ls -la /dev/fuse                 # must exist; needed for s3fs in container
+
+# 2. Build the sandbox image (run from the repo root, on the sandbox host or
+#    against the remote daemon via DOCKER_HOST)
+cd deploy/sandbox-image
+docker build -t evoagent-sandbox:python3.11 .
+
+# 3. (Optional) verify the image can mount your bucket
+docker run --rm --cap-add SYS_ADMIN --device /dev/fuse:/dev/fuse:rwm \
+  --security-opt apparmor=unconfined --network host \
+  -e MINIO_ENDPOINT=<minio-url> \
+  -e MINIO_ACCESS_KEY=<key> -e MINIO_SECRET_KEY=<secret> \
+  -e MINIO_BUCKET=<bucket> -e USER_ID=_smoke \
+  -e LANGUAGE=bash -e TIMEOUT_S=10 \
+  -e CODE='ls -la; echo from-sandbox > probe.txt && cat probe.txt' \
+  evoagent-sandbox:python3.11
+```
+
+The build pre-installs the whitelisted scientific stack (`numpy`,
+`pandas`, `requests`, `httpx`) plus s3fs-fuse. Final image is ~300 MB and
+takes ~1 min cold (apt cached) on a clean daemon. From a region without
+PyPI reachability, the bundled `Dockerfile` already routes pip through
+the Aliyun mirror; swap to your own mirror by editing
+[`deploy/sandbox-image/Dockerfile`](deploy/sandbox-image/Dockerfile).
+
+### Wire the server to the sandbox host
+
+The Python `docker` SDK reads `DOCKER_HOST` from the environment. Three
+transports, in order of preference:
+
+| `DOCKER_HOST` | When to use |
+|---|---|
+| *(empty)* | Server runs on the same box as the docker daemon (e.g. server + sandbox host co-located). Uses `/var/run/docker.sock`. |
+| `ssh://user@host` | Server is separate from the sandbox host. **Requires SSH public-key auth** (the SDK does not accept passwords). Set up via `ssh-copy-id` + ensure the host is in the server's `~/.ssh/known_hosts`. |
+| `tcp://host:2375` | Daemon is exposed over TCP. Insecure unless behind a VPN or fronted by TLS (`tcp://host:2376` + `DOCKER_TLS_VERIFY=1`). |
+
+Concrete example for `ssh://`:
+
+```bash
+# On the server box (one-time):
+ssh-keygen -t rsa                                       # if ~/.ssh/id_rsa missing
+ssh-copy-id root@<sandbox-host>                         # push pubkey
+ssh-keyscan -H <sandbox-host> >> ~/.ssh/known_hosts     # accept fingerprint
+ssh -o BatchMode=yes root@<sandbox-host> 'docker version'  # must succeed without prompting
+
+# In .env on the server:
+MINIO_ENDPOINT=http://<minio-host>:9000
+MINIO_ACCESS_KEY=...
+MINIO_SECRET_KEY=...
+MINIO_BUCKET=evoagent-workspaces
+SANDBOX_BACKEND=docker
+SANDBOX_IMAGE=evoagent-sandbox:python3.11
+SANDBOX_NETWORK=host
+DOCKER_HOST=ssh://root@<sandbox-host>
+```
+
+On startup the server runs a fail-fast configuration check
+([`app/api/server.py`](app/api/server.py)): it instantiates both backends,
+logs `Runtime mode: MINIO  storage=MinIOSDKBackend  sandbox=RemoteDockerBackend`,
+and refuses to start on inconsistent combinations (e.g. `SANDBOX_BACKEND=docker`
+but no `MINIO_ENDPOINT`).
+
+### Verify end-to-end
+
+```bash
+# 1. /health
+curl -s http://localhost:8194/health
+# {"status":"ok"}
+
+# 2. Trigger an execute_code call and confirm the sandbox label is the docker one
+curl -N -H 'Content-Type: application/json' http://localhost:8194/api/agent/chat \
+  -d '{"userId":"smoke","sessionId":"s1","plugins":["execute_code"],
+       "data":{"input":"用 execute_code 运行 print(2+3)"}}' \
+  | grep -o '"sandbox": "[^"]*"' | head -1
+# "sandbox": "docker(evoagent-sandbox:python3.11,net=host)"
+```
+
+A failure with `Cannot reach Docker daemon (...): Server '<host>' not found
+in known_hosts` means `DOCKER_HOST=ssh://...` is set but key auth isn't
+ready — re-run the `ssh-copy-id` / `ssh-keyscan` steps above.
+
 ## Repository Layout
 
 ```
@@ -105,17 +219,26 @@ Mentarc-EvoAgent/
 │   ├── agent.py            # EvoAgent orchestrator (Section 3.3)
 │   ├── agent_compat.py     # BaseTool -> OpenAI SDK FunctionTool adapter
 │   ├── sub_agent.py        # Sub-agent runner (Appendix A Phase 2.5)
-│   ├── plugins/            # External + internal tools
+│   ├── plugins/
+│   │   ├── execute_code.py # Backend dispatcher (validation + sandbox.run)
+│   │   └── sandbox/        # Pluggable sandbox backends
+│   │       ├── local.py    # LocalBwrapBackend (LOCAL mode)
+│   │       └── remote_docker.py  # RemoteDockerBackend (MINIO mode)
 │   └── skills/             # Three-stage skill matcher + skill manager
 ├── configs/
 │   ├── prompts/            # SOUL.md / USER.md / MEMORY.md templates
 │   ├── skills/skill-creator# Built-in meta-skill for authoring new skills
 │   └── agents/             # (Empty) drop-in sub-agent configs
 ├── utils/
-│   ├── workspace.py        # Per-user local-filesystem persistence
+│   ├── workspace.py        # Per-user persistence (routes to backend below)
+│   ├── storage_backend/    # Pluggable storage backends
+│   │   ├── localfs.py      # LocalFSBackend (LOCAL mode)
+│   │   └── minio_sdk.py    # MinIOSDKBackend (MINIO mode)
 │   ├── history_compressor.py  # Structured history compaction
 │   ├── embedding.py
 │   └── token_counter.py
+├── deploy/
+│   └── sandbox-image/      # Dockerfile + entrypoint for evoagent-sandbox
 ├── evaluation/             # RQ1 / RQ2 / RQ3 experiment scripts
 ├── REPRODUCIBILITY.md
 ├── CITATION.cff
@@ -155,10 +278,10 @@ No. Only `OPENAI_API_KEY` is required. The others (Doubao, Tavily) only activate
 `MODEL`, `MODEL_VISION` and `COMPRESSION_MODEL` default to names from the paper's experimental setup. If your endpoint doesn't expose those names, override via env vars: `MODEL=gpt-4o`, `COMPRESSION_MODEL=gpt-4o-mini`, `MODEL_VISION=gpt-4o` are reasonable defaults on the public OpenAI API.
 
 **What happens to my data?**
-Every interaction is written to `data/workspace/{user_id}/` on the server process's local disk. Nothing is sent to third parties except the LLM calls you have configured. `.gitignore` excludes `data/` and `logs/` — don't commit them.
+In LOCAL mode, every interaction is written to `data/workspace/{user_id}/` on the server process's local disk. In MINIO mode, the same per-user tree lives as keys under `{user_id}/...` in your MinIO bucket. Nothing is sent to third parties except the LLM calls you have configured. `.gitignore` excludes `data/` and `logs/` — don't commit them.
 
 **Is `execute_code` safe?**
-No. It runs bash / Python in the user's workspace directory with a small regex blacklist and CWD confinement. See [SECURITY.md § 1](SECURITY.md) for the list of hardening steps required before exposing it. If you don't need it, remove `"execute_code"` from `PLUGIN_CLASSES` in `core/plugins/__init__.py` or set `DEFAULT_PLUGINS` to an explicit list that excludes it.
+It depends on the deployment mode. In **LOCAL** mode it runs bash / Python via the bwrap fallback (or plain `subprocess` if bwrap is unavailable) on the same host as the server — only suitable for single-tenant trusted use. In **MINIO** mode every invocation runs in a one-shot Docker container on a separate sandbox host with its workspace mounted via s3fs; an escape from the user's code is bounded by the container, the network rules around the docker daemon, and the scope of the MinIO credentials handed in (currently the server's root creds; M3 swaps them for STS tokens scoped to `{user_id}/*`). See [SECURITY.md § 1](SECURITY.md) for the full caveat list. If you don't need the tool at all, remove `"execute_code"` from `PLUGIN_CLASSES` in `core/plugins/__init__.py` or set `DEFAULT_PLUGINS` to an explicit list that excludes it.
 
 **Can I deploy this behind a public URL?**
 Not as-is. At minimum: put it behind an authenticating reverse proxy, disable `execute_code`, add rate limiting, and review [SECURITY.md](SECURITY.md) in full. This is a research codebase.

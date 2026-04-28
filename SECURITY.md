@@ -8,36 +8,120 @@ Several components ship with explicit demo-level implementations that are called
 
 ## Known limitations (do not deploy publicly without mitigating)
 
-### 1. `execute_code` tool runs in a soft sandbox
+### 1. `execute_code` tool — sandbox depends on deployment mode
 
-[`core/plugins/execute_code.py`](core/plugins/execute_code.py) executes arbitrary bash / Python inside the user's workspace directory.
+[`core/plugins/execute_code.py`](core/plugins/execute_code.py) is a thin
+dispatcher that delegates to one of two backends, picked at startup by
+[`core/plugins/sandbox/__init__.py::make_sandbox_backend`](core/plugins/sandbox/__init__.py)
+based on whether `MINIO_ENDPOINT` is set. The dispatcher itself enforces
+language whitelist (bash / python only), a regex blacklist for destructive
+patterns (`rm -rf /`, `mkfs`, `dd if=`, `shutdown`, fork bombs, raw-device
+overwrite), CWD path validation (no traversal), 30 s default timeout, and
+10 KB output truncation. Everything else depends on the backend.
 
-**Current safeguards**
+#### MINIO mode → `RemoteDockerBackend` (validated, recommended)
 
-- CWD confined to `WORKSPACE_ROOT/{user_id}/`
-- Regex blacklist for a handful of destructive patterns (`rm -rf /`, `mkfs`, `dd if=`, `shutdown`, fork bombs, raw-device overwrite)
-- 30s default timeout, 10 KB output truncation
-- **Bubblewrap sandbox** (code path only, **not field-tested** — see below): `core/plugins/execute_code.py` contains a bwrap wrapper that auto-activates on Linux when `bwrap` is installed. Every invocation spawns an ephemeral sandbox that rw-binds only the user's own workspace directory, ro-binds `sys.prefix` + standard system paths, unshares user / ipc / pid / uts / cgroup namespaces, and enforces `RLIMIT_AS` (default 512 MB) + `RLIMIT_CPU` (= timeout) via `prlimit`. Network access is allowed by default; disable via `EXECUTE_CODE_NETWORK=deny`. Force or disable bwrap via `EXECUTE_CODE_SANDBOX=bubblewrap|off`.
+Each invocation creates a one-shot Docker container on a separate sandbox
+host:
 
-> **⚠️ The bwrap path is unverified in production.** Our own dev / paper environment runs EvoAgent inside a Docker container whose default seccomp profile blocks `unshare()`, which bwrap depends on. The integration is shipped disabled (`EXECUTE_CODE_SANDBOX=off` in `.env`) and has never been observed working end-to-end in the original deployment. Treat it as reference code, not a production safeguard — validate on your own host before trusting it. For any deployment that accepts untrusted input, prefer a **remote cloud sandbox** (E2B, Modal, Daytona, a managed gVisor / Firecracker runtime) wired in as a new backend parallel to the current `bwrap`/`subprocess` branches in `execute_code.py`.
+- **Container**: `evoagent-sandbox:python3.11` (built from
+  [`deploy/sandbox-image/`](deploy/sandbox-image)). Started with
+  `--cap-add SYS_ADMIN --device /dev/fuse --security-opt apparmor=unconfined`
+  (FUSE prerequisites for s3fs).
+- **Workspace**: the MinIO bucket is mounted via s3fs at `/workspace` and
+  the entrypoint `cd`s into `/workspace/{user_id}/{cwd}`. Server-side
+  writes via `MinIOSDKBackend` and sandbox-side writes through s3fs share
+  the same object key space — strong consistency, no caches.
+- **Lifecycle**: server runs `containers.run(detach=True, auto_remove=False)`,
+  reads stdout/stderr after the container exits, then `force=True` removes
+  it in `finally`. `--rm` is intentionally not used because we read logs
+  after exit. Container leaks are possible if the server is `kill -9`'d
+  mid-run; handle with a periodic `docker container prune -f --filter "until=1h"`
+  on the sandbox host.
+- **Credentials passed in (env)**: `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` /
+  `MINIO_BUCKET` / `USER_ID`. M2 ships with the **server's root credentials**;
+  this is the most permissive option and should be replaced before production
+  exposure (see roadmap below).
 
-**What the sandbox does NOT protect against**
+**What this protects against**
 
-- **VM-grade isolation**: bwrap is host-level (mount + namespace), not a VM. A Linux kernel escape (rare but not zero) compromises the host. For adversarial multi-tenant use, upgrade to gVisor / Kata / Firecracker.
-- **seccomp-bpf**: we do not yet filter syscalls. Dangerous syscalls reachable by the code still execute under the kernel.
-- **`sys.prefix` leakage**: the ro-bound `sys.prefix` contains whatever the server env has installed, including — if you deployed via `pip install -e .` — EvoAgent's own code (reachable via `import core.agent`). This by itself doesn't let sandboxed code touch other users' workspaces (those paths aren't bound) but it does leak framework internals. Deploy with `python -m app.api.server` from the repo root instead of an editable install to avoid this.
-- **Non-Linux hosts** (macOS, Windows, BSDs): bwrap is unavailable. The tool silently falls back to `subprocess.run` with CWD confinement only — exactly the behaviour before the sandbox patch. Do not expose an `execute_code`-enabled server on non-Linux.
-- **Subprocess-without-bwrap** (`EXECUTE_CODE_SANDBOX=off` or fallback): the sandbox is off, back to pre-sandbox guarantees. Only safe for single-tenant trusted use.
+- Process / mount / network namespace separation between sandbox runs and the
+  server (kernel-mediated, not VM-grade).
+- Kernel escape from sandbox cannot reach the *server* host; it lands on
+  the *sandbox* host, whose blast radius is whatever you've allowed it on
+  the network and in your MinIO ACL.
+- A misbehaving sandbox cannot eat the server's RAM / CPU / disk.
 
-**Before exposing `execute_code` to untrusted users**
+**What this does NOT protect against (yet)**
 
-1. Confirm `EXECUTE_CODE_SANDBOX=bubblewrap` resolves (not `off`), and the host has `bwrap` installed.
-2. Consider `EXECUTE_CODE_NETWORK=deny` unless the workflow requires outbound net.
-3. Add a seccomp-bpf syscall allow-list on top of bwrap, or upgrade to gVisor / Firecracker.
-4. Add per-user concurrency + QPS caps (see also § 3).
-5. Persist an audit log for every invocation (see `TODO(sandbox)` in `execute_code.py` for the full hardening ladder).
+- **Cross-user MinIO access from sandbox.** M2 hands the server's root
+  creds to the container. Code in the sandbox can read/write any prefix
+  in the bucket. M3 in the roadmap swaps these for STS tokens scoped to
+  `{user_id}/*` with a 5-minute TTL.
+- **Network egress.** `--network host` (the validated default) gives the
+  container the same network reachability as the sandbox host. Tighten
+  with a custom bridge + iptables/NetworkPolicy, or an egress proxy.
+- **Kernel escape.** Containers are not VMs. For adversarial multi-tenant
+  use, run the sandbox host on gVisor / Kata / Firecracker, or replace
+  this backend with a managed runtime (E2B, Modal, Daytona).
+- **Container leaks on server crash.** `auto_remove=False` + finally-remove
+  works for clean exits and timeouts; `kill -9` on the server leaves an
+  Exited container until pruned.
 
-If your deployment does not need `execute_code`, remove it from [`core/plugins/__init__.py`](core/plugins/__init__.py)'s `PLUGIN_CLASSES` and from `DEFAULT_PLUGINS`.
+**Before exposing MINIO mode to untrusted users**
+
+1. Implement STS scoping so the sandbox sees credentials scoped to
+   `arn:aws:s3:::{bucket}/{user_id}/*` with a 5-minute TTL, instead of
+   the server's root creds. MinIO requires the Allow + Deny-NotResource
+   pattern (the AWS-standard single Allow does not work on MinIO 2024+).
+2. Replace `--network host` with a bridge that only routes to the MinIO
+   endpoint + DNS; default-deny everything else.
+3. Add per-user concurrency + QPS caps in `execute_code.py` (see § 3).
+4. Move the docker daemon onto a hardened runtime (gVisor preferred for
+   density, Firecracker for adversarial isolation).
+5. Persist an audit log of every `(user_id, code_hash, sandbox_label,
+   return_code, stderr_tail)` tuple.
+
+#### LOCAL mode → `LocalBwrapBackend` (legacy, single-tenant only)
+
+The pre-M2 path: same host as the server, bwrap rw-binds the user's
+workspace and ro-binds `sys.prefix` + standard system paths, unshares
+user / ipc / pid / uts / cgroup namespaces, and enforces `RLIMIT_AS`
+(default 512 MB) + `RLIMIT_CPU` (= timeout) via `prlimit`. Network access
+is allowed by default; disable via `EXECUTE_CODE_NETWORK=deny`. Force or
+disable bwrap via `EXECUTE_CODE_SANDBOX=bubblewrap|off` (this env var has
+no effect in MINIO mode).
+
+> **⚠️ The bwrap path is unverified in production.** Our own dev / paper
+> environment runs EvoAgent inside a Docker container whose default
+> seccomp profile blocks `unshare()`, which bwrap depends on, so bwrap has
+> never been observed working end-to-end in the original deployment.
+> Treat it as reference code, not a production safeguard — validate on
+> your own host before trusting it.
+
+**What this does NOT protect against**
+
+- **VM-grade isolation**: bwrap is host-level. A Linux kernel escape
+  compromises the *server* host (which also holds your LLM keys and the
+  whole `data/workspace/`).
+- **seccomp-bpf**: we do not filter syscalls.
+- **`sys.prefix` leakage**: the ro-bound `sys.prefix` contains whatever
+  the server env has installed; if deployed via `pip install -e .`,
+  EvoAgent's own code is reachable via `import core.agent`. Deploy with
+  `python -m app.api.server` from the repo root to minimise this.
+- **Non-Linux hosts** (macOS, Windows, BSDs): bwrap is unavailable and the
+  backend silently falls back to `subprocess.run` with CWD confinement
+  only.
+- **`EXECUTE_CODE_SANDBOX=off`**: subprocess-only, no isolation at all.
+  Single-tenant trusted use exclusively.
+
+**Before exposing LOCAL mode to untrusted users**: don't. Switch to MINIO
+mode first.
+
+#### If you do not need `execute_code` at all
+
+Remove it from [`core/plugins/__init__.py`](core/plugins/__init__.py)'s
+`PLUGIN_CLASSES` and from `DEFAULT_PLUGINS`.
 
 ### 2. Demo-grade authentication
 

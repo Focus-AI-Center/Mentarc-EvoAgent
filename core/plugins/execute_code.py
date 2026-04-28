@@ -1,59 +1,47 @@
 """Code execution plugin — runs bash or Python inside the user's workspace.
 
-The tool always operates with CWD confined to `WORKSPACE_ROOT/{user_id}/`
-(optionally a sub-path), so each user has an isolated scratch directory.
-Basic safety checks reject a small set of obviously destructive patterns.
+This module is now a thin dispatcher: input validation + safety checks +
+delegation to a ``SandboxBackend`` selected at startup by
+``core.plugins.sandbox.make_sandbox_backend``.
 
-Sandbox modes (controlled by the ``EXECUTE_CODE_SANDBOX`` env var):
+Two backends exist (chosen automatically by the storage mode — see
+``core/plugins/sandbox/__init__.py``):
 
-  auto        (default)  Use bubblewrap on Linux when the ``bwrap`` binary is
-                         available; otherwise fall back to a plain subprocess.
-  bubblewrap             Force bubblewrap; log a warning + fall back if
-                         ``bwrap`` is missing.
-  off                    Always use a plain subprocess (legacy behaviour).
+  - ``LocalBwrapBackend`` (LOCAL mode, ``MINIO_ENDPOINT`` empty) — bubblewrap
+    on Linux when available, plain subprocess fallback. Sees the host's
+    ``WORKSPACE_ROOT/{user_id}/`` directory directly.
 
-When bwrap is active every invocation spawns a fresh ephemeral sandbox that:
+  - ``RemoteDockerBackend`` (MINIO mode, ``MINIO_ENDPOINT`` set) — one-shot
+    container per invocation, mounts the MinIO bucket via s3fs, sees a real
+    ``/workspace/{user_id}/`` tree backed by object storage.
 
-  - rw-binds the user's workspace directory at the SAME absolute path so
-    ``images/``, ``skills/``, ``sessions/``, ``prompts/`` etc. are visible and
-    writeable to code, and changes are instantly visible to other plugins /
-    the HTTP `/raw/` endpoint on the host;
-  - ro-binds the server's Python installation (``sys.prefix``) + system
-    directories (``/usr``, ``/bin``, ``/lib*``, ``/etc/ssl``...) so the full
-    stdlib + installed site-packages + standard shell utilities are available;
-  - unshares user / ipc / pid / uts / cgroup namespaces; network is shared by
-    default (opt out with ``EXECUTE_CODE_NETWORK=deny``);
-  - applies ``prlimit`` for memory (``EXECUTE_CODE_MEMORY_MB``, default 512)
-    and CPU time (= ``timeout``).
+Validation kept at this layer (backend-agnostic):
 
-Remaining hardening (future work, not yet implemented):
+  - Reject obviously destructive patterns (``rm -rf /``, ``mkfs``, fork bomb…).
+  - Clamp timeout to ``[1, 120]``.
+  - Confine ``cwd`` to a relative subpath under the user's workspace
+    (no leading ``/``, no ``..``).
+  - Truncate stdout/stderr to ``10 000`` chars (the backend already does this,
+    but we re-cap here so a misbehaving backend can't blow up the LLM context).
 
-  1. Dedicated sandbox Python venv with an allow-list of packages, ro-bound
-     instead of the server's own ``sys.prefix`` (prevents leakage of the
-     repo's own code when deployed via ``pip install -e .``).
-  2. Ephemeral container per invocation (gVisor / Kata / Firecracker) for
-     VM-grade isolation.
-  3. Remote sandbox service (E2B, Modal, Daytona, ...).
-  4. seccomp-bpf syscall allow-list on top of bwrap.
-  5. Network egress allow-list per skill.
-  6. Per-user concurrency cap + global QPS cap.
-  7. Audit log of ``{user_id, code, cwd, returncode, duration_ms}``.
+Output cap and timeout cap are dispatcher-level invariants — backends inherit
+them but the user-visible JSON payload is shaped here.
 """
 
 import json
 import os
-import platform
 import re
-import shutil
-import subprocess
-import sys
-from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from configs.settings import WORKSPACE_ROOT
 from core.agent_compat import BaseTool
 from core.plugins.base import PluginMeta, register_plugin
+from core.plugins.sandbox import (
+    SandboxBackend,
+    SandboxResult,
+    SandboxStartupError,
+    make_sandbox_backend,
+)
 from utils.logger import logger
 
 _DANGEROUS_PATTERNS = [
@@ -66,155 +54,41 @@ _DANGEROUS_PATTERNS = [
     r">\s*/dev/(sd|nvme|hd)\w*",  # raw-device overwrite
     r"\bchmod\s+-R\s+000\s+/",
 ]
+
 _MAX_OUTPUT_CHARS = 10_000
 _DEFAULT_TIMEOUT = 30
 _MAX_TIMEOUT = 120
 
-
-# --- Sandbox config (read once at import) ------------------------------------
-
-_SANDBOX_MODE = os.getenv("EXECUTE_CODE_SANDBOX", "auto").lower()
 _SANDBOX_NETWORK = os.getenv("EXECUTE_CODE_NETWORK", "allow").lower()
 _SANDBOX_MEMORY_MB = int(os.getenv("EXECUTE_CODE_MEMORY_MB", "512"))
-
-
-def _resolved_sandbox_mode() -> str:
-    """Resolve the requested ``EXECUTE_CODE_SANDBOX`` value to ``off`` or ``bubblewrap``.
-
-    - ``off`` / ``none`` / ``disabled`` / ``false`` / ``0`` → ``off``
-    - ``bubblewrap`` → ``bubblewrap`` if ``bwrap`` binary is available and
-      host is Linux; otherwise ``off`` (logs a warning once).
-    - ``auto`` (default) → ``bubblewrap`` on Linux when ``bwrap`` exists,
-      otherwise ``off`` silently.
-    """
-    if _SANDBOX_MODE in ("off", "none", "disabled", "false", "0"):
-        return "off"
-    has_bwrap = platform.system() == "Linux" and shutil.which("bwrap") is not None
-    if _SANDBOX_MODE == "bubblewrap":
-        if not has_bwrap:
-            logger.warning(
-                "EXECUTE_CODE_SANDBOX=bubblewrap requested but `bwrap` is not "
-                "available on this host; falling back to unsandboxed subprocess."
-            )
-            return "off"
-        return "bubblewrap"
-    # auto
-    return "bubblewrap" if has_bwrap else "off"
 
 
 def _network_allowed() -> bool:
     return _SANDBOX_NETWORK not in ("deny", "off", "false", "0", "no")
 
 
-def _user_workspace_root(cwd: Path) -> Path:
-    """Return the per-user workspace directory containing ``cwd``.
-
-    If ``cwd`` is already the user's workspace root (i.e. a direct child of
-    ``WORKSPACE_ROOT``), return it. If ``cwd`` is a subdirectory, walk up to
-    the user-level directory so bind-mount covers siblings like ``images/``.
-    Falls back to ``cwd`` when the path is not under ``WORKSPACE_ROOT``
-    (shouldn't happen given the earlier ``relative_to`` check in ``__call__``).
-    """
-    ws_root = Path(WORKSPACE_ROOT).resolve()
-    try:
-        rel_parts = cwd.resolve().relative_to(ws_root).parts
-    except ValueError:
-        return cwd
-    if not rel_parts:
-        return cwd
-    return ws_root / rel_parts[0]
+# Process-wide singleton — first call resolves the backend (Local vs Docker)
+# and pings any external dependency (Docker daemon). Subsequent calls reuse it.
+_BACKEND: SandboxBackend | None = None
 
 
-def _build_bwrap_command(
-    cmd: list[str],
-    cwd: Path,
-    env: dict[str, str],
-    *,
-    timeout: int,
-    network: bool,
-    memory_mb: int,
-) -> list[str]:
-    """Wrap ``cmd`` in ``prlimit + bwrap`` for workspace-compatible sandboxing.
+def _get_backend() -> SandboxBackend:
+    global _BACKEND
+    if _BACKEND is None:
+        _BACKEND = make_sandbox_backend()
+    return _BACKEND
 
-    - Binds the user's per-user workspace directory at the SAME absolute path
-      (rw), so bash/Python inside the sandbox see the exact same paths that
-      the host uses — no translation layer needed by other plugins.
-    - Ro-binds system dirs + the server's ``sys.prefix`` so stdlib /
-      site-packages / shell utilities remain available.
-    - Unshares user / ipc / pid / uts / cgroup namespaces. Network only if
-      ``network`` is True.
-    - ``prlimit`` applies ``RLIMIT_AS`` (memory) and ``RLIMIT_CPU``.
-    """
-    user_ws = _user_workspace_root(cwd)
 
-    args: list[str] = [
-        "bwrap",
-        "--die-with-parent",
-        "--new-session",
-        "--unshare-user",
-        "--unshare-ipc",
-        "--unshare-pid",
-        "--unshare-uts",
-        "--unshare-cgroup",
-    ]
-    if network:
-        args += ["--share-net"]
-    else:
-        args += ["--unshare-net"]
-
-    # System (read-only, best-effort; --ro-bind-try silently skips missing paths)
-    for p in (
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/lib",
-        "/lib32",
-        "/lib64",
-        "/etc/alternatives",
-        "/etc/ssl",
-        "/etc/ca-certificates",
-        "/etc/resolv.conf",
-        "/etc/nsswitch.conf",
-        "/etc/hosts",
-    ):
-        args += ["--ro-bind-try", p, p]
-
-    # Python installation — sys.prefix covers {bin,lib}/python/site-packages
-    args += ["--ro-bind-try", sys.prefix, sys.prefix]
-    if sys.base_prefix != sys.prefix:
-        args += ["--ro-bind-try", sys.base_prefix, sys.base_prefix]
-
-    # User workspace at same absolute path (rw)
-    args += ["--bind", str(user_ws), str(user_ws)]
-
-    # Minimal runtime filesystems
-    args += [
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--tmpfs",
-        "/tmp",
-        "--chdir",
-        str(cwd),
-    ]
-
-    # Env vars (explicit — bwrap does not inherit)
-    for k, v in env.items():
-        args += ["--setenv", k, str(v)]
-
-    full = args + list(cmd)
-
-    # Resource limits wrapper. prlimit applies before exec, inherited by children.
-    if memory_mb > 0 or timeout > 0:
-        limits = ["prlimit"]
-        if memory_mb > 0:
-            limits.append(f"--as={memory_mb * 1024 * 1024}")
-        if timeout > 0:
-            limits.append(f"--cpu={timeout}")
-        full = limits + full
-
-    return full
+def _validate_cwd(cwd: str | None) -> tuple[str, str | None]:
+    """Validate user-supplied ``cwd``; return (normalized, error)."""
+    if not cwd:
+        return "", None
+    if cwd.startswith("/") or cwd.startswith("\\"):
+        return "", "cwd 必须是 workspace 下的相对路径（不能以 / 开头）"
+    parts = [p for p in re.split(r"[\\/]+", cwd) if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        return "", "cwd 不能包含 .. （禁止跳出 workspace）"
+    return "/".join(parts), None
 
 
 class ExecuteCodeParams(BaseModel):
@@ -256,54 +130,17 @@ class ExecuteCodeTool(BaseTool):
         super().__init__(**kwargs)
         self._user_id = kwargs.get("user_id") or "anonymous"
 
-    def _workspace_dir(self) -> Path:
-        return Path(WORKSPACE_ROOT).resolve() / self._user_id
-
     async def __call__(self, params: ExecuteCodeParams) -> str:
         code = (params.code or "").strip()
         if not code:
-            return json.dumps({"success": False, "error": "code 不能为空"}, ensure_ascii=False)
+            return json.dumps(
+                {"success": False, "error": "code 不能为空"}, ensure_ascii=False
+            )
 
         lang = (params.language or "bash").lower()
-        timeout = min(max(int(params.timeout or _DEFAULT_TIMEOUT), 1), _MAX_TIMEOUT)
-
-        # Safety: reject obvious destructive patterns
-        for pat in _DANGEROUS_PATTERNS:
-            if re.search(pat, code, re.IGNORECASE):
-                logger.warning(f"execute_code refused user={self._user_id} pattern={pat!r}")
-                return json.dumps(
-                    {
-                        "success": False,
-                        "error": f"拒绝执行：命中危险模式 {pat!r}",
-                    },
-                    ensure_ascii=False,
-                )
-
-        # Resolve cwd strictly within the user's workspace
-        ws_dir = self._workspace_dir()
-        ws_dir.mkdir(parents=True, exist_ok=True)
-        if params.cwd:
-            try:
-                cwd_path = (ws_dir / params.cwd).resolve()
-                cwd_path.relative_to(ws_dir)
-            except (ValueError, OSError) as e:
-                return json.dumps(
-                    {
-                        "success": False,
-                        "error": f"cwd 必须位于用户 workspace 内: {e}",
-                    },
-                    ensure_ascii=False,
-                )
-            cwd_path.mkdir(parents=True, exist_ok=True)
-        else:
-            cwd_path = ws_dir
-
-        # Build the subprocess command
-        if lang == "python":
-            cmd = [sys.executable, "-c", code]
-        elif lang in ("bash", "sh", "shell"):
-            cmd = ["bash", "-c", code]
-        else:
+        if lang in ("sh", "shell"):
+            lang = "bash"
+        if lang not in ("bash", "python"):
             return json.dumps(
                 {
                     "success": False,
@@ -312,67 +149,60 @@ class ExecuteCodeTool(BaseTool):
                 ensure_ascii=False,
             )
 
-        # PATH also prepends sys.prefix/bin so plain `python` / `pip` without
-        # absolute paths resolve to the server's interpreter inside the sandbox.
-        system_path = os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
-        env = {
-            "HOME": str(cwd_path),
-            "PATH": f"{sys.prefix}/bin:{system_path}",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8"),
-            "LANG": os.environ.get("LANG", "C.UTF-8"),
-        }
+        timeout = min(max(int(params.timeout or _DEFAULT_TIMEOUT), 1), _MAX_TIMEOUT)
 
-        mode = _resolved_sandbox_mode()
-        if mode == "bubblewrap":
-            full_cmd = _build_bwrap_command(
-                cmd,
-                cwd_path,
-                env,
-                timeout=timeout,
-                network=_network_allowed(),
-                memory_mb=_SANDBOX_MEMORY_MB,
-            )
-            # bwrap owns cwd + env; do not double-set on subprocess.
-            run_kwargs: dict = {}
-            sandbox_label = (
-                f"bubblewrap(network={'on' if _network_allowed() else 'off'},mem={_SANDBOX_MEMORY_MB}MB)"
-            )
-        else:
-            full_cmd = cmd
-            run_kwargs = {"cwd": str(cwd_path), "env": env}
-            sandbox_label = "none"
+        for pat in _DANGEROUS_PATTERNS:
+            if re.search(pat, code, re.IGNORECASE):
+                logger.warning(
+                    f"execute_code refused user={self._user_id} pattern={pat!r}"
+                )
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": f"拒绝执行：命中危险模式 {pat!r}",
+                    },
+                    ensure_ascii=False,
+                )
 
-        logger.debug(f"execute_code user={self._user_id} lang={lang} sandbox={sandbox_label} cwd={cwd_path}")
+        rel_cwd, cwd_err = _validate_cwd(params.cwd)
+        if cwd_err:
+            return json.dumps(
+                {"success": False, "error": cwd_err}, ensure_ascii=False
+            )
 
         try:
-            result = subprocess.run(
-                full_cmd,
-                capture_output=True,
-                text=True,
-                # Small grace period so prlimit CPU can kill first on CPU-bound bombs.
-                timeout=timeout + 5,
-                **run_kwargs,
-            )
-        except subprocess.TimeoutExpired:
+            backend = _get_backend()
+        except SandboxStartupError as err:
+            logger.error(f"execute_code backend startup failed: {err}")
             return json.dumps(
-                {
-                    "success": False,
-                    "error": f"执行超时（>{timeout}s）",
-                    "sandbox": sandbox_label,
-                },
+                {"success": False, "error": f"sandbox unavailable: {err}"},
                 ensure_ascii=False,
             )
-        except Exception as e:
-            logger.error(f"execute_code failed user={self._user_id}: {e}")
+
+        logger.debug(
+            f"execute_code user={self._user_id} lang={lang} cwd={rel_cwd or '.'} "
+            f"timeout={timeout}s backend={type(backend).__name__}"
+        )
+
+        try:
+            result: SandboxResult = await backend.run(
+                user_id=self._user_id,
+                cwd=rel_cwd,
+                code=code,
+                language=lang,
+                timeout_s=timeout,
+                memory_mb=_SANDBOX_MEMORY_MB,
+                network=_network_allowed(),
+            )
+        except Exception as err:
+            logger.error(f"execute_code failed user={self._user_id}: {err}")
             return json.dumps(
-                {"success": False, "error": str(e), "sandbox": sandbox_label},
-                ensure_ascii=False,
+                {"success": False, "error": str(err)}, ensure_ascii=False
             )
 
         stdout = result.stdout or ""
         stderr = result.stderr or ""
-        truncated = False
+        truncated = result.truncated
         if len(stdout) > _MAX_OUTPUT_CHARS:
             stdout = stdout[:_MAX_OUTPUT_CHARS]
             truncated = True
@@ -380,19 +210,26 @@ class ExecuteCodeTool(BaseTool):
             stderr = stderr[:_MAX_OUTPUT_CHARS]
             truncated = True
 
-        try:
-            rel_cwd = str(cwd_path.relative_to(ws_dir)) or "."
-        except ValueError:
-            rel_cwd = str(cwd_path)
+        if result.timed_out:
+            return json.dumps(
+                {
+                    "success": False,
+                    "error": f"执行超时（>{timeout}s）",
+                    "sandbox": result.sandbox_label,
+                    "stdout": stdout,
+                },
+                ensure_ascii=False,
+            )
 
-        payload = {
-            "success": result.returncode == 0,
+        payload: dict = {
+            "success": result.return_code == 0,
             "language": lang,
-            "cwd": rel_cwd,
-            "return_code": result.returncode,
+            "cwd": rel_cwd or ".",
+            "return_code": result.return_code,
             "stdout": stdout,
             "stderr": stderr,
-            "sandbox": sandbox_label,
+            "sandbox": result.sandbox_label,
+            "duration_ms": result.duration_ms,
         }
         if truncated:
             payload["note"] = f"输出超过 {_MAX_OUTPUT_CHARS} 字符，已截断"

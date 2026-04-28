@@ -161,6 +161,36 @@ class MinIOSDKBackend:
             )
         return len(objs)
 
+    # ── sync StorageBackend interface ────────────────────────────────────
+    # Used by ``utils/workspace.py`` (synchronous public API). Each call is one
+    # blocking minio-py round trip — fine for the hot path (small files), and
+    # async siblings below cover bulk fan-out via ``asyncio.gather``.
+
+    def read_bytes_sync(self, key: str) -> bytes:
+        return self._read_bytes_sync(key)
+
+    def read_text_sync(self, key: str) -> str:
+        return self._read_bytes_sync(key).decode("utf-8")
+
+    def write_bytes_sync(
+        self, key: str, data: bytes, *, if_match: str | None = None
+    ) -> str:
+        return self._write_bytes_sync(key, data, if_match)
+
+    def write_text_sync(
+        self, key: str, content: str, *, if_match: str | None = None
+    ) -> str:
+        return self._write_bytes_sync(key, content.encode("utf-8"), if_match)
+
+    def list_keys_sync(self, prefix: str) -> list[str]:
+        return self._list_keys_sync(prefix)
+
+    def delete_sync(self, key_or_prefix: str) -> int:
+        return self._delete_sync(key_or_prefix)
+
+    def head_etag_sync(self, key: str) -> str | None:
+        return self._stat_etag(key)
+
     # ── async StorageBackend interface ───────────────────────────────────
 
     async def read_bytes(self, key: str) -> bytes:

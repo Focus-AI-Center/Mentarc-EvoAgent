@@ -10,9 +10,49 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routers import agent, auth, skills, sub_agent, user, workspace
+from core.plugins.sandbox import make_sandbox_backend
+from utils.logger import logger
+from utils.storage_backend import get_backend
 
 # Suppress noisy loggers
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+# ── Startup config validation ────────────────────────────────────────────────
+#
+# Run at import time so a misconfigured deployment crashes the worker
+# immediately rather than failing at first request. The two factories below
+# also fail fast on cross-mode configurations (LocalFS storage + remote
+# sandbox, or MinIO storage + bwrap sandbox) — see plan §1.0.
+
+def _validate_runtime_config() -> None:
+    storage = get_backend()  # eager: creates the singleton, surfaces missing creds
+    storage_label = type(storage).__name__
+    minio_endpoint = os.getenv("MINIO_ENDPOINT", "").strip()
+    mode = "MINIO" if minio_endpoint else "LOCAL"
+
+    sandbox = make_sandbox_backend()
+    sandbox_label = type(sandbox).__name__
+
+    extras: list[str] = []
+    if mode == "MINIO":
+        bucket = os.getenv("MINIO_BUCKET", "evoagent-workspaces")
+        extras.append(f"bucket={bucket}")
+        extras.append(f"endpoint={minio_endpoint}")
+        extras.append(f"docker={os.getenv('DOCKER_HOST', '<local>')}")
+        extras.append(
+            f"image={os.getenv('SANDBOX_IMAGE', 'evoagent-sandbox:python3.11')}"
+        )
+    else:
+        extras.append(f"workspace={os.getenv('WORKSPACE_ROOT', 'data/workspace')}")
+
+    logger.info(
+        f"runtime: mode={mode} storage={storage_label} sandbox={sandbox_label} "
+        + " ".join(extras)
+    )
+
+
+_validate_runtime_config()
 
 
 # -- optional rate limiting (slowapi) ----------------------------------------
