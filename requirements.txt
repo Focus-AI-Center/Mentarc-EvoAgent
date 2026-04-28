@@ -34,3 +34,6 @@ numpy>=1.26,<3.0
 aiohttp>=3.9,<4.0
 html2text>=2024.2,<2026.0
 requests>=2.31,<3.0
+
+# Storage (MinIO mode only; LOCAL mode does not import minio)
+minio>=7.2,<8.0

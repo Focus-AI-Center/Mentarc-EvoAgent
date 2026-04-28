@@ -63,12 +63,17 @@ dependencies = [
     "aiohttp>=3.9,<4.0",
     "html2text>=2024.2,<2026.0",
     "requests>=2.31,<3.0",
+
+    # Storage (MinIO mode only; LOCAL mode does not import minio).
+    "minio>=7.2,<8.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "ruff>=0.4,<1.0",
     "pre-commit>=3.7,<5.0",
+    "pytest>=8.0,<9.0",
+    "pytest-asyncio>=0.23,<1.0",
 ]
 
 [project.urls]
@@ -86,6 +91,11 @@ exclude = ["tests*", "evaluation*"]
 
 [tool.setuptools.package-data]
 configs = ["prompts/*.md", "skills/**/*.md", "agents/*.md"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
 
 [tool.ruff]
 line-length = 110
