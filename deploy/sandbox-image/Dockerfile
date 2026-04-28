@@ -2,8 +2,10 @@
 #
 # Boot sequence (entrypoint.sh):
 #   1. write MinIO creds to /etc/passwd-s3fs (mode 600)
-#   2. s3fs mount $MINIO_BUCKET → /workspace
-#   3. cd /workspace/$USER_ID/$REL_CWD
+#   2. s3fs mount $MINIO_BUCKET:/$USER_ID → /workspace
+#      (only the user's prefix is exposed; other users' prefixes are not in
+#      the FUSE view, so a cross-user `ls /workspace/other_user` cannot work)
+#   3. cd /workspace/$REL_CWD
 #   4. exec python -c "$CODE"  or  bash -c "$CODE"  under `timeout`
 #   5. fusermount -u /workspace (always, via trap)
 #
@@ -36,15 +38,31 @@ FROM python:3.11-slim
 # `fuse3` provides /usr/bin/fusermount3; we symlink it as `fusermount` for
 # compatibility with Alibaba Linux / older Debian where the package is named
 # differently. `procps` ships ps/kill which the timeout / trap path expects.
-RUN apt-get update \
+#
+# Swap the upstream Debian mirrors for the Aliyun mirror. The build host is in
+# the China region and `deb.debian.org` averages <100 KB/s from there, which
+# stretches the apt-get install above to 20+ minutes. The mirror covers both
+# the deb822-format `debian.sources` (Debian 12+) and the legacy
+# `sources.list`, so this works whether the base image flips formats.
+RUN { [ -f /etc/apt/sources.list.d/debian.sources ] && sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources; true; } \
+    && { [ -f /etc/apt/sources.list ] && sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list; true; } \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         s3fs \
         fuse \
         bash \
         coreutils \
         procps \
+        util-linux \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Non-root user for the actual code execution. The entrypoint runs as root
+# (needs CAP_SYS_ADMIN for FUSE), drops the MinIO credential env vars after
+# s3fs starts, then exec's the user's code as `sandbox` via runuser. The
+# sandbox UID cannot read /etc/passwd-s3fs (mode 600 root) nor s3fs's
+# /proc/<pid>/environ (root-owned), so the credentials are unreachable.
+RUN useradd --uid 2000 --no-create-home --shell /bin/bash sandbox
 
 # Pre-install the whitelisted scientific stack so cold-start does not hit
 # pip/network. Keep this list deliberately narrow — anything else the user

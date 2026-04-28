@@ -2,9 +2,9 @@
 
 Two implementations:
 
-- ``LocalBwrapBackend`` — bubblewrap (or plain subprocess) on the same host
-  as the server. Used in LOCAL mode (``MINIO_ENDPOINT`` empty); rw-binds the
-  user's local workspace directory at the same absolute path.
+- ``LocalSubprocessBackend`` — plain ``subprocess.run`` on the same host as
+  the server, scoped to the user's workspace directory. Used in LOCAL mode
+  (``MINIO_ENDPOINT`` empty). Single-tenant / trusted-host only.
 
 - ``RemoteDockerBackend`` — one-shot container per invocation, talking to a
   Docker daemon (local socket or remote SSH/TCP). The container mounts the
@@ -86,13 +86,13 @@ def make_sandbox_backend() -> SandboxBackend:
     The choice is paired with the storage backend (selected by
     ``MINIO_ENDPOINT``):
 
-    - ``MINIO_ENDPOINT`` unset    → ``LocalBwrapBackend``
+    - ``MINIO_ENDPOINT`` unset    → ``LocalSubprocessBackend``
     - ``MINIO_ENDPOINT`` set      → backend per ``SANDBOX_BACKEND``
                                     (``docker`` default; ``k8s`` rejected
                                     until M5).
 
     Cross-mode configurations (LocalFS storage + remote sandbox, or MinIO
-    storage + bwrap sandbox) are forbidden — the two halves share state and
+    storage + local sandbox) are forbidden — the two halves share state and
     have to agree on where the workspace lives.
     """
     minio_endpoint = os.getenv("MINIO_ENDPOINT", "").strip()
@@ -102,11 +102,11 @@ def make_sandbox_backend() -> SandboxBackend:
         if sandbox_backend in ("docker", "k8s"):
             raise RuntimeError(
                 f"SANDBOX_BACKEND={sandbox_backend!r} requires MINIO_ENDPOINT to be set "
-                f"(LOCAL mode pairs storage=LocalFS with sandbox=bwrap; cross-mode is forbidden)."
+                f"(LOCAL mode pairs storage=LocalFS with sandbox=subprocess; cross-mode is forbidden)."
             )
-        from .local import LocalBwrapBackend
+        from .local import LocalSubprocessBackend
 
-        return LocalBwrapBackend()
+        return LocalSubprocessBackend()
 
     # MINIO mode
     chosen = sandbox_backend or "docker"

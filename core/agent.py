@@ -4,6 +4,7 @@ Uses OpenAI Agents SDK for the LLM + tool execution loop (ReAct).
 EvoAgent handles context enrichment (skills, profile, workspace).
 """
 
+import asyncio
 import json
 import re
 import time
@@ -105,9 +106,13 @@ class EvoAgent:
         # Per-user workspace (local filesystem)
         self.workspace = workspace or Workspace(user_id)
 
-        # System prompt
-        self.base_system_prompt = system_prompt or _prompt_body(self.workspace.read_prompt("SOUL"))
-        self.system_prompt = self.base_system_prompt
+        # System prompt is resolved lazily in ``load_session`` so the SOUL
+        # read (a remote MinIO GET in MINIO mode) joins the same
+        # ``asyncio.gather`` as USER / MEMORY / history / skills instead of
+        # running synchronously in __init__ on the request hot path.
+        self._system_prompt_override = system_prompt
+        self.base_system_prompt = ""
+        self.system_prompt = ""
 
         # Components
         self.skill_manager = SkillManager(workspace=self.workspace)
@@ -161,23 +166,48 @@ class EvoAgent:
     # --- Session & Context ---
 
     async def load_session(self):
-        """Load conversation history and context for this session."""
-        history_data = await ws_call(self.workspace, "history_load", self.session_id)
+        """Load conversation history + context for this session.
+
+        Fires the five workspace reads (history, SOUL, USER, MEMORY,
+        top-level skills) concurrently. In MINIO mode each one is a remote
+        GET / LIST so collapsing the round-trips dominates pre-stream
+        latency — keeping them sequential adds 4 × RTT to every turn.
+        ``ws_call`` already trampolines onto the default thread-pool, and
+        the synchronous ``get_all_skills`` is wrapped in ``to_thread`` here
+        so it joins the same gather rather than blocking the event loop
+        afterwards.
+        """
+        # When the caller passes an explicit ``system_prompt`` override we
+        # skip the SOUL read entirely; otherwise it joins the gather.
+        soul_task = (
+            asyncio.sleep(0, result=self._system_prompt_override)
+            if self._system_prompt_override
+            else ws_call(self.workspace, "read_prompt", "SOUL")
+        )
+        history_data, soul_text, user_text, memory_text, top_skills = await asyncio.gather(
+            ws_call(self.workspace, "history_load", self.session_id),
+            soul_task,
+            ws_call(self.workspace, "read_prompt", "USER"),
+            ws_call(self.workspace, "read_prompt", "MEMORY"),
+            asyncio.to_thread(self.skill_manager.get_all_skills, self.user_id, top_level_only=True),
+        )
+
         if history_data and isinstance(history_data, dict):
             raw = history_data.get("conversation", [])
             self.history = _sanitize_history(raw)
             logger.info(f"Loaded {len(self.history)} messages for session {self.session_id}")
-        await self._inject_context()
 
-    async def _inject_context(self):
-        """Load user profile and skill catalog, inject into system prompt."""
-        user_body = _prompt_body(await ws_call(self.workspace, "read_prompt", "USER"))
+        self.base_system_prompt = (
+            self._system_prompt_override if self._system_prompt_override else _prompt_body(soul_text)
+        )
+
+        user_body = _prompt_body(user_text)
         if user_body:
             self.system_prompt = self.base_system_prompt + f"\n\n## 用户信息\n{user_body}"
         else:
             self.system_prompt = self.base_system_prompt
 
-        memory_body = _prompt_body(await ws_call(self.workspace, "read_prompt", "MEMORY"))
+        memory_body = _prompt_body(memory_text)
         if memory_body:
             self.system_prompt += (
                 "\n\n## 记忆索引\n"
@@ -186,7 +216,7 @@ class EvoAgent:
                 "详细规则见下方「长期记忆维护」。_"
             )
 
-        self._preloaded_skills = self.skill_manager.get_all_skills(self.user_id, top_level_only=True)
+        self._preloaded_skills = top_skills
         if self._preloaded_skills:
             catalog = "\n".join(
                 f"- **{s.name}**: {s.description} (触发词: {', '.join(s.triggers)})"

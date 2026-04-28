@@ -28,10 +28,13 @@ host:
   [`deploy/sandbox-image/`](deploy/sandbox-image)). Started with
   `--cap-add SYS_ADMIN --device /dev/fuse --security-opt apparmor=unconfined`
   (FUSE prerequisites for s3fs).
-- **Workspace**: the MinIO bucket is mounted via s3fs at `/workspace` and
-  the entrypoint `cd`s into `/workspace/{user_id}/{cwd}`. Server-side
-  writes via `MinIOSDKBackend` and sandbox-side writes through s3fs share
-  the same object key space — strong consistency, no caches.
+- **Workspace**: only the user's bucket prefix is mounted —
+  `s3fs {bucket}:/{user_id} /workspace` — so the container's FUSE view
+  starts at the user's root. `cd /workspace/../other_user` resolves above
+  the FUSE mount (it lands on the container's own rootfs, not on s3fs),
+  so cross-user paths are simply not reachable through the filesystem.
+  Server-side writes via `MinIOSDKBackend` and sandbox-side writes through
+  s3fs share the same object key space — strong consistency, no caches.
 - **Lifecycle**: server runs `containers.run(detach=True, auto_remove=False)`,
   reads stdout/stderr after the container exits, then `force=True` removes
   it in `finally`. `--rm` is intentionally not used because we read logs
@@ -42,6 +45,16 @@ host:
   `MINIO_BUCKET` / `USER_ID`. M2 ships with the **server's root credentials**;
   this is the most permissive option and should be replaced before production
   exposure (see roadmap below).
+- **Privilege drop before user code runs**. The entrypoint runs as root only
+  long enough to write `/etc/passwd-s3fs` (mode 600 root) and start the s3fs
+  mount; it then `unset`s `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` and
+  `exec runuser -u sandbox --` into the user's command. The `sandbox` UID
+  (2000, no home, no sudo) cannot read the cred file (mode 600) nor s3fs's
+  `/proc/<pid>/environ` (root-owned), and `runuser ... -- env ...` resets the
+  inherited env to a minimal allowlist (`HOME`, `LANG`, `LC_ALL`, plus
+  Python-only flags). The s3fs mount is configured with
+  `allow_other -o uid=2000 -o gid=2000` so reads / writes through `/workspace`
+  still work for the unprivileged UID.
 
 **What this protects against**
 
@@ -54,10 +67,19 @@ host:
 
 **What this does NOT protect against (yet)**
 
-- **Cross-user MinIO access from sandbox.** M2 hands the server's root
-  creds to the container. Code in the sandbox can read/write any prefix
-  in the bucket. M3 in the roadmap swaps these for STS tokens scoped to
-  `{user_id}/*` with a 5-minute TTL.
+- **Cross-user MinIO access if a privileged process is compromised.** The
+  s3fs mount is scoped to `{bucket}:/{user_id}` (FUSE view cannot reach
+  other users' prefixes) and the cred env vars are scrubbed before user
+  code runs as `sandbox` UID 2000 (so a Python `boto3` client inside the
+  sandbox cannot read the keys from `os.environ`, `/etc/passwd-s3fs`, or
+  `/proc/<pid>/environ`). What this does **not** stop: a kernel exploit
+  that escalates back to root in the namespace can still read the cred
+  file and the s3fs daemon's environ, which would re-expose the server's
+  root credentials and grant access to any user prefix in the bucket. M3
+  in the roadmap closes this last gap by replacing the env creds with
+  STS tokens scoped to `{user_id}/*` with a 5-minute TTL — even a full
+  privilege escalation then only buys 5 minutes of single-user blast
+  radius.
 - **Network egress.** `--network host` (the validated default) gives the
   container the same network reachability as the sandbox host. Tighten
   with a custom bridge + iptables/NetworkPolicy, or an egress proxy.
@@ -82,38 +104,26 @@ host:
 5. Persist an audit log of every `(user_id, code_hash, sandbox_label,
    return_code, stderr_tail)` tuple.
 
-#### LOCAL mode → `LocalBwrapBackend` (legacy, single-tenant only)
+#### LOCAL mode → `LocalSubprocessBackend` (single-tenant only)
 
-The pre-M2 path: same host as the server, bwrap rw-binds the user's
-workspace and ro-binds `sys.prefix` + standard system paths, unshares
-user / ipc / pid / uts / cgroup namespaces, and enforces `RLIMIT_AS`
-(default 512 MB) + `RLIMIT_CPU` (= timeout) via `prlimit`. Network access
-is allowed by default; disable via `EXECUTE_CODE_NETWORK=deny`. Force or
-disable bwrap via `EXECUTE_CODE_SANDBOX=bubblewrap|off` (this env var has
-no effect in MINIO mode).
-
-> **⚠️ The bwrap path is unverified in production.** Our own dev / paper
-> environment runs EvoAgent inside a Docker container whose default
-> seccomp profile blocks `unshare()`, which bwrap depends on, so bwrap has
-> never been observed working end-to-end in the original deployment.
-> Treat it as reference code, not a production safeguard — validate on
-> your own host before trusting it.
+Same host as the server. The dispatcher hands the validated code to
+`subprocess.run` with `cwd` set to the user's workspace directory under
+`WORKSPACE_ROOT/{user_id}/`. There is **no kernel-level isolation** — no
+namespaces, no seccomp filter, no resource limits beyond the
+dispatcher-level wall-clock timeout. The only barriers are the
+dispatcher's regex blacklist, cwd confinement (no `..`, no absolute
+paths), the timeout, and output truncation.
 
 **What this does NOT protect against**
 
-- **VM-grade isolation**: bwrap is host-level. A Linux kernel escape
-  compromises the *server* host (which also holds your LLM keys and the
-  whole `data/workspace/`).
-- **seccomp-bpf**: we do not filter syscalls.
-- **`sys.prefix` leakage**: the ro-bound `sys.prefix` contains whatever
-  the server env has installed; if deployed via `pip install -e .`,
-  EvoAgent's own code is reachable via `import core.agent`. Deploy with
-  `python -m app.api.server` from the repo root to minimise this.
-- **Non-Linux hosts** (macOS, Windows, BSDs): bwrap is unavailable and the
-  backend silently falls back to `subprocess.run` with CWD confinement
-  only.
-- **`EXECUTE_CODE_SANDBOX=off`**: subprocess-only, no isolation at all.
-  Single-tenant trusted use exclusively.
+- **Anything a normal subprocess can do as the server's UID**: read
+  arbitrary host files the server can read, exhaust memory / CPU / disk,
+  modify other users' workspaces under `WORKSPACE_ROOT`, exfiltrate LLM
+  API keys from the environment, etc.
+- **Network egress**: the subprocess inherits the host's network. Use a
+  host-level firewall if you need to restrict it.
+- **Non-Linux hosts**: works the same way (no platform-specific
+  isolation to lose).
 
 **Before exposing LOCAL mode to untrusted users**: don't. Switch to MINIO
 mode first.

@@ -23,7 +23,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # Run at import time so a misconfigured deployment crashes the worker
 # immediately rather than failing at first request. The two factories below
 # also fail fast on cross-mode configurations (LocalFS storage + remote
-# sandbox, or MinIO storage + bwrap sandbox) — see plan §1.0.
+# sandbox, or MinIO storage + local sandbox) — see plan §1.0.
 
 def _validate_runtime_config() -> None:
     storage = get_backend()  # eager: creates the singleton, surfaces missing creds

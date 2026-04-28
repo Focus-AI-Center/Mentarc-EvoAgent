@@ -3,10 +3,10 @@
 Each invocation spawns a one-shot ``evoagent-sandbox`` container on the
 configured Docker daemon. The container's entrypoint:
 
-  1. mounts the MinIO bucket at ``/workspace/{user_id}`` via s3fs (so the
-     sandbox sees the same tree the server's ``StorageBackend`` writes to);
-  2. ``cd``s into ``/workspace/{user_id}/{cwd}`` and executes the user's
-     code via bash or python;
+  1. s3fs-mounts only the user's bucket prefix (``{bucket}:/{user_id}``)
+     at ``/workspace`` so the FUSE view cannot reach other users' prefixes;
+  2. ``cd``s into ``/workspace/{cwd}`` and executes the user's code
+     via bash or python;
   3. ``fusermount -u`` and exits.
 
 The sandbox runs with:
@@ -106,7 +106,7 @@ class RemoteDockerBackend:
         language: str,
         timeout_s: int,
         memory_mb: int,
-        network: bool,  # accepted for API parity with LocalBwrapBackend
+        network: bool,  # accepted for API parity; container network is preconfigured
     ) -> SandboxResult:
         sandbox_label = f"docker({self.image},net={self.network})"
         if not self.minio_endpoint or not self.minio_access_key or not self.minio_secret_key:
@@ -185,6 +185,11 @@ class RemoteDockerBackend:
 
         out, t1 = _truncate(stdout)
         err_text, t2 = _truncate(stderr)
+        # The entrypoint runs user code under coreutils ``timeout``, which
+        # exits 124 on SIGTERM-on-deadline (well-known coreutils code). Map
+        # that to the ``timed_out`` flag so the execute_code dispatcher can
+        # render a "timed out" note instead of treating it as a normal
+        # non-zero exit.
         return SandboxResult(
             return_code=return_code,
             stdout=out,
@@ -192,6 +197,7 @@ class RemoteDockerBackend:
             duration_ms=int((time.time() - t0) * 1000),
             sandbox_label=sandbox_label,
             truncated=t1 or t2,
+            timed_out=(return_code == 124),
         )
 
 

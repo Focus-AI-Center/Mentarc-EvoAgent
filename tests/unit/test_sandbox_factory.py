@@ -11,11 +11,11 @@ import pytest
 from core.plugins.sandbox import make_sandbox_backend
 
 
-def test_local_mode_returns_bwrap(monkeypatch):
+def test_local_mode_returns_subprocess(monkeypatch):
     monkeypatch.delenv("MINIO_ENDPOINT", raising=False)
     monkeypatch.delenv("SANDBOX_BACKEND", raising=False)
     backend = make_sandbox_backend()
-    assert type(backend).__name__ == "LocalBwrapBackend"
+    assert type(backend).__name__ == "LocalSubprocessBackend"
 
 
 def test_minio_mode_returns_docker(monkeypatch):

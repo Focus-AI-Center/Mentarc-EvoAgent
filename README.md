@@ -20,11 +20,11 @@ Official implementation of **"EvoAgent: An Evolvable Agent Framework with Skill 
 >
 > - **LOCAL mode** (default, no `MINIO_ENDPOINT`). Workspace data lives on the
 >   server's local disk under `data/workspace/{user_id}/`. `execute_code`
->   runs through the bubblewrap fallback in `core/plugins/sandbox/local.py`
->   (or a plain `subprocess` if `bwrap` isn't installed). **The bwrap path
->   has not been field-tested in production** — it is shipped as reference
->   code; validate on your own host before trusting it. Use this mode for
->   single-machine research / paper reproduction only.
+>   runs as a plain `subprocess` scoped to the user's workspace directory
+>   (see `core/plugins/sandbox/local.py`). **There is no kernel-level
+>   isolation** — the dispatcher's regex blacklist, cwd confinement, and
+>   timeout are the only barriers. Use this mode for single-machine research
+>   / paper reproduction only.
 >
 > - **MINIO mode** (set `MINIO_ENDPOINT`). Workspace data lives in a MinIO
 >   bucket; `execute_code` runs in a one-shot Docker container on a
@@ -92,8 +92,8 @@ python cli.py --user demo            # interactive CLI
 ```
 
 The default `.env.example` has `MINIO_ENDPOINT` empty, which gives you the
-**LOCAL** mode (workspaces in `data/workspace/`, `execute_code` via bwrap
-fallback). For multi-user / persistent / hardened deployments, switch to
+**LOCAL** mode (workspaces in `data/workspace/`, `execute_code` via plain
+subprocess). For multi-user / persistent / hardened deployments, switch to
 **MINIO** mode — see the next section.
 
 ## Deployment Modes
@@ -102,8 +102,8 @@ fallback). For multi-user / persistent / hardened deployments, switch to
 |---|---|---|
 | Trigger | `MINIO_ENDPOINT` empty | `MINIO_ENDPOINT` set |
 | Storage backend | `LocalFSBackend` (`data/workspace/{user_id}/`) | `MinIOSDKBackend` (S3 keys `{user_id}/...`) |
-| Sandbox backend | `LocalBwrapBackend` (bwrap or subprocess) | `RemoteDockerBackend` (one-shot container on a separate host) |
-| Workspace ↔ sandbox | rw-bind mount on the same host | s3fs mount of the MinIO bucket inside the container |
+| Sandbox backend | `LocalSubprocessBackend` (plain subprocess) | `RemoteDockerBackend` (one-shot container on a separate host) |
+| Workspace ↔ sandbox | direct file access on the same host | s3fs mount of the MinIO bucket inside the container |
 | Server can be restarted/scaled? | No (state on local disk) | Yes (state in MinIO) |
 | Cross-mode configs | rejected at startup (`make_sandbox_backend` / `get_backend`) | |
 
@@ -222,7 +222,7 @@ Mentarc-EvoAgent/
 │   ├── plugins/
 │   │   ├── execute_code.py # Backend dispatcher (validation + sandbox.run)
 │   │   └── sandbox/        # Pluggable sandbox backends
-│   │       ├── local.py    # LocalBwrapBackend (LOCAL mode)
+│   │       ├── local.py    # LocalSubprocessBackend (LOCAL mode)
 │   │       └── remote_docker.py  # RemoteDockerBackend (MINIO mode)
 │   └── skills/             # Three-stage skill matcher + skill manager
 ├── configs/
@@ -281,7 +281,7 @@ No. Only `OPENAI_API_KEY` is required. The others (Doubao, Tavily) only activate
 In LOCAL mode, every interaction is written to `data/workspace/{user_id}/` on the server process's local disk. In MINIO mode, the same per-user tree lives as keys under `{user_id}/...` in your MinIO bucket. Nothing is sent to third parties except the LLM calls you have configured. `.gitignore` excludes `data/` and `logs/` — don't commit them.
 
 **Is `execute_code` safe?**
-It depends on the deployment mode. In **LOCAL** mode it runs bash / Python via the bwrap fallback (or plain `subprocess` if bwrap is unavailable) on the same host as the server — only suitable for single-tenant trusted use. In **MINIO** mode every invocation runs in a one-shot Docker container on a separate sandbox host with its workspace mounted via s3fs; an escape from the user's code is bounded by the container, the network rules around the docker daemon, and the scope of the MinIO credentials handed in (currently the server's root creds; M3 swaps them for STS tokens scoped to `{user_id}/*`). See [SECURITY.md § 1](SECURITY.md) for the full caveat list. If you don't need the tool at all, remove `"execute_code"` from `PLUGIN_CLASSES` in `core/plugins/__init__.py` or set `DEFAULT_PLUGINS` to an explicit list that excludes it.
+It depends on the deployment mode. In **LOCAL** mode it runs bash / Python via plain `subprocess` on the same host as the server, scoped to the user's workspace directory but with no kernel-level isolation — only suitable for single-tenant trusted use. In **MINIO** mode every invocation runs in a one-shot Docker container on a separate sandbox host with its workspace mounted via s3fs; an escape from the user's code is bounded by the container, the network rules around the docker daemon, and the scope of the MinIO credentials handed in (currently the server's root creds; M3 swaps them for STS tokens scoped to `{user_id}/*`). See [SECURITY.md § 1](SECURITY.md) for the full caveat list. If you don't need the tool at all, remove `"execute_code"` from `PLUGIN_CLASSES` in `core/plugins/__init__.py` or set `DEFAULT_PLUGINS` to an explicit list that excludes it.
 
 **Can I deploy this behind a public URL?**
 Not as-is. At minimum: put it behind an authenticating reverse proxy, disable `execute_code`, add rate limiting, and review [SECURITY.md](SECURITY.md) in full. This is a research codebase.

@@ -1,9 +1,7 @@
-"""Behaviour tests for ``LocalBwrapBackend`` (sandbox in LOCAL mode).
+"""Behaviour tests for ``LocalSubprocessBackend`` (sandbox in LOCAL mode).
 
-These tests run on whatever the dev host provides — bubblewrap if present,
-plain subprocess otherwise. They exercise the public ``run()`` contract
-(stdout, stderr, return_code, timed_out, sandbox_label) without binding to
-either branch's specific label.
+Exercises the public ``run()`` contract: stdout, stderr, return_code,
+timed_out, sandbox_label, and the cwd-escape rejection path.
 """
 
 from __future__ import annotations
@@ -35,9 +33,9 @@ def isolated_workspace(monkeypatch):
 
 @pytest.fixture
 def backend(isolated_workspace):
-    from core.plugins.sandbox.local import LocalBwrapBackend
+    from core.plugins.sandbox.local import LocalSubprocessBackend
 
-    return LocalBwrapBackend()
+    return LocalSubprocessBackend()
 
 
 # ── basic exec ──────────────────────────────────────────────────────────
@@ -145,6 +143,5 @@ async def test_timeout_kills_process(backend):
         memory_mb=0,
         network=True,
     )
-    # Either the timed_out path (TimeoutExpired) or the prlimit --cpu kill
-    # under bwrap. Both are acceptable; we only require non-zero exit.
     assert r.return_code != 0
+    assert r.timed_out

@@ -7,13 +7,14 @@ delegation to a ``SandboxBackend`` selected at startup by
 Two backends exist (chosen automatically by the storage mode — see
 ``core/plugins/sandbox/__init__.py``):
 
-  - ``LocalBwrapBackend`` (LOCAL mode, ``MINIO_ENDPOINT`` empty) — bubblewrap
-    on Linux when available, plain subprocess fallback. Sees the host's
-    ``WORKSPACE_ROOT/{user_id}/`` directory directly.
+  - ``LocalSubprocessBackend`` (LOCAL mode, ``MINIO_ENDPOINT`` empty) — plain
+    ``subprocess.run`` scoped to the user's workspace directory. Single-tenant
+    / trusted-host only; no kernel-level isolation.
 
   - ``RemoteDockerBackend`` (MINIO mode, ``MINIO_ENDPOINT`` set) — one-shot
-    container per invocation, mounts the MinIO bucket via s3fs, sees a real
-    ``/workspace/{user_id}/`` tree backed by object storage.
+    container per invocation, s3fs-mounts only the user's bucket prefix
+    (``{bucket}:/{user_id}``) at ``/workspace`` so the container's FUSE view
+    cannot see other users' data.
 
 Validation kept at this layer (backend-agnostic):
 
