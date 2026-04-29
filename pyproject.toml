@@ -66,6 +66,9 @@ dependencies = [
 
     # Storage (MinIO mode only; LOCAL mode does not import minio).
     "minio>=7.2,<8.0",
+
+    # Observability — Prometheus client; /metrics endpoint serves the snapshot.
+    "prometheus-client>=0.20,<1.0",
 ]
 
 [project.optional-dependencies]

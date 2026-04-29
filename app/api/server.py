@@ -32,7 +32,11 @@ def _validate_runtime_config() -> None:
     mode = "MINIO" if minio_endpoint else "LOCAL"
 
     sandbox = make_sandbox_backend()
-    sandbox_label = type(sandbox).__name__
+    # The factory wraps the chosen backend in MetricsSandboxBackend; unwrap so
+    # the startup log shows the real backend (Local… / RemoteDocker…) and not
+    # the decorator's class name.
+    sandbox_inner = getattr(sandbox, "_inner", sandbox)
+    sandbox_label = type(sandbox_inner).__name__
 
     extras: list[str] = []
     if mode == "MINIO":
@@ -131,6 +135,22 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus exposition endpoint.
+
+    Single-process registry: this serves the snapshot of the current uvicorn
+    worker. If we move to gunicorn multi-worker, switch to
+    ``MultiProcessCollector`` and ``PROMETHEUS_MULTIPROC_DIR``; the metric
+    names and label sets stay the same so dashboards don't break.
+    """
+    from fastapi.responses import Response
+
+    from utils.metrics import CONTENT_TYPE_LATEST, generate_latest
+
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 def main() -> None:

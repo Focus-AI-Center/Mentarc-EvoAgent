@@ -105,8 +105,9 @@ def make_sandbox_backend() -> SandboxBackend:
                 f"(LOCAL mode pairs storage=LocalFS with sandbox=subprocess; cross-mode is forbidden)."
             )
         from .local import LocalSubprocessBackend
+        from .metrics import MetricsSandboxBackend
 
-        return LocalSubprocessBackend()
+        return MetricsSandboxBackend(LocalSubprocessBackend(), label="local")
 
     # MINIO mode
     chosen = sandbox_backend or "docker"
@@ -119,9 +120,10 @@ def make_sandbox_backend() -> SandboxBackend:
         raise RuntimeError(
             f"Unknown SANDBOX_BACKEND={chosen!r}. Supported: 'docker' (default)."
         )
+    from .metrics import MetricsSandboxBackend
     from .remote_docker import RemoteDockerBackend
 
-    return RemoteDockerBackend()
+    return MetricsSandboxBackend(RemoteDockerBackend(), label="docker")
 
 
 __all__ = [
