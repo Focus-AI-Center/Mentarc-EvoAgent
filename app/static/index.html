@@ -8,31 +8,33 @@
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js" defer></script>
 <style>
   :root {
-    --bg: #ffffff;
-    --bg-secondary: #fafafa;
-    --bg-tertiary: #f5f5f7;
-    --fg: #1d1d1f;
-    --fg-secondary: #424245;
-    --fg-muted: #86868b;
-    --accent: #0071e3;
-    --accent-hover: #0077ed;
-    --border: #d2d2d7;
-    --border-light: rgba(0,0,0,0.06);
-    --user-bg: #1d1d1f;
-    --user-text: #ffffff;
-    --bot-bg: #f5f5f7;
-    --bot-text: #1d1d1f;
-    --tool-bg: #fefce8;
-    --tool-border: #e5c07b;
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
-    --shadow-md: 0 4px 16px rgba(0,0,0,0.06);
-    --shadow-lg: 0 8px 32px rgba(0,0,0,0.1);
+    /* Warm editorial palette */
+    --bg: #f5f4ed;              /* Parchment — page background */
+    --bg-secondary: #faf9f5;    /* Ivory — cards, elevated surfaces */
+    --bg-tertiary: #e8e6dc;     /* Warm Sand — buttons, chips */
+    --fg: #141413;              /* Near black */
+    --fg-secondary: #4d4c48;    /* Charcoal Warm */
+    --fg-muted: #87867f;        /* Stone Gray */
+    --accent: #c96442;          /* Terracotta Brand — primary CTA */
+    --accent-hover: #d97757;    /* Coral Accent */
+    --border: #e8e6dc;          /* Border Warm */
+    --border-light: #f0eee6;    /* Border Cream */
+    --ring: #d1cfc5;            /* Ring Warm — ring-shadow color */
+    --user-bg: #141413;         /* Near Black bubble */
+    --user-text: #faf9f5;       /* Ivory text on dark */
+    --bot-bg: #faf9f5;          /* Ivory bubble */
+    --bot-text: #141413;
+    --tool-bg: #faf9f5;         /* Ivory (replaces warm-yellow) */
+    --tool-border: #e8e6dc;     /* Border Warm */
+    --shadow-sm: 0 1px 2px rgba(20,20,19,0.04);
+    --shadow-md: 0 4px 24px rgba(20,20,19,0.05);  /* Whisper shadow */
+    --shadow-lg: 0 8px 32px rgba(20,20,19,0.08);
     --radius-sm: 8px;
     --radius-md: 12px;
     --radius-lg: 16px;
     --radius-pill: 980px;
     --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-    --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --font-display: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "Source Han Serif SC", serif;
     --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", Monaco, "Cascadia Mono", Menlo, "Courier New", monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -72,18 +74,21 @@
   .header .logo-icon {
     width: 28px;
     height: 28px;
-    background: linear-gradient(135deg, #1d1d1f 0%, #424245 100%);
-    border-radius: 7px;
+    background: var(--fg);
+    border-radius: var(--radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;
-    color: white;
-    font-size: 14px;
-    font-weight: 700;
+    color: var(--accent);
+    font-family: var(--font-display);
+    font-size: 16px;
+    font-weight: 500;
+    letter-spacing: 0;
   }
   .header .logo-text {
-    font-size: 1.05rem;
-    font-weight: 600;
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 500;
     color: var(--fg);
     letter-spacing: -0.01em;
   }
@@ -264,30 +269,39 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 6px 12px;
+    padding: 8px 14px;
     font-size: 0.75rem;
-    background: #f8f8fa;
-    border-radius: 10px;
-    transition: background 0.15s;
+    background: var(--tool-bg);
+    border-radius: var(--radius-md);
+    box-shadow: 0 0 0 1px var(--border-light);
+    transition: box-shadow 0.18s ease, background 0.18s ease;
     flex-wrap: wrap;
   }
-  .tool-card:hover { background: #f0f0f3; }
+  .tool-card:hover {
+    background: var(--tool-bg);
+    box-shadow: 0 0 0 1px var(--ring);
+  }
   .tool-card .tool-icon {
-    width: 24px;
-    height: 24px;
-    border-radius: 6px;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.82rem;
     flex-shrink: 0;
-    background: rgba(0,0,0,0.04);
+    background: var(--bg-tertiary);
+    color: var(--fg-secondary);
+  }
+  .tool-card .tool-icon svg {
+    width: 15px;
+    height: 15px;
   }
   .tool-card .tool-label {
-    font-weight: 600;
+    font-weight: 500;
     color: var(--fg);
     white-space: nowrap;
-    font-size: 0.75rem;
+    font-size: 0.78rem;
+    letter-spacing: 0.01em;
   }
   .tool-card .tool-desc {
     color: var(--fg-muted);
@@ -297,28 +311,43 @@
     white-space: nowrap;
     flex: 1;
     min-width: 0;
+    font-feature-settings: "ss01" on;
   }
-  .tool-card.pending .tool-desc { opacity: 0.5; }
+  .tool-card.pending .tool-desc { opacity: 0.6; }
+  .tool-card.pending .tool-icon {
+    background: var(--bg-tertiary);
+    color: var(--accent);
+    animation: tool-pending-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes tool-pending-pulse {
+    0%, 100% { opacity: 0.55; }
+    50% { opacity: 1; }
+  }
   .tool-card.done { cursor: pointer; }
-  .tool-card.done:hover { background: #ececee; }
+  .tool-card.done:hover {
+    box-shadow: 0 0 0 1px var(--ring), var(--shadow-md);
+  }
   .tool-card .tool-output {
     width: 100%;
     max-height: 0;
     overflow: hidden;
-    transition: max-height 0.25s ease, padding 0.25s;
+    transition: max-height 0.25s ease, padding 0.25s ease, margin-top 0.25s ease;
     font-family: var(--font-mono);
     font-size: 0.68rem;
-    color: #374151;
+    color: var(--fg-secondary);
     white-space: pre-wrap;
     word-break: break-all;
-    line-height: 1.5;
+    line-height: 1.6;
+  }
+  .tool-card.expanded {
+    box-shadow: 0 0 0 1px var(--ring);
   }
   .tool-card.expanded .tool-output {
     max-height: 220px;
     overflow-y: auto;
-    margin-top: 6px;
-    padding-top: 6px;
-    border-top: 0.5px solid #e5e7eb;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-light);
   }
 
   /* ===== Profile Update Card ===== */
@@ -336,14 +365,14 @@
     line-height: 1.5;
   }
   .profile-field-name {
-    color: #6b7280;
+    color: var(--fg-muted);
     font-weight: 500;
     white-space: nowrap;
     min-width: 64px;
   }
   .profile-field-name::after { content: '：'; }
   .profile-field-value {
-    color: #111827;
+    color: var(--fg);
     word-break: break-all;
   }
 
@@ -398,7 +427,7 @@
   }
   .input-wrap:focus-within {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(0,113,227,0.1);
+    box-shadow: 0 0 0 3px rgba(201,100,66,0.1);
   }
   .input-wrap textarea {
     flex: 1;
@@ -629,7 +658,7 @@
   }
   .ws-save-status {
     font-size: 0.75rem;
-    color: #34c759;
+    color: #7a8a6f;
     align-self: center;
     font-weight: 500;
   }
@@ -644,22 +673,21 @@
   .html-preview-card {
     display: flex; align-items: center; gap: 12px;
     padding: 12px 16px; margin: 10px 0;
-    background: linear-gradient(135deg, #f8f9ff, #f0f4ff);
-    border: 1px solid #d4deff;
-    border-radius: 12px; cursor: pointer;
-    transition: all 0.2s;
+    background: var(--bg-secondary);
+    box-shadow: 0 0 0 1px var(--border-light);
+    border-radius: var(--radius-md); cursor: pointer;
+    transition: box-shadow 0.2s ease;
     max-width: 380px;
   }
   .html-preview-card:hover {
-    background: linear-gradient(135deg, #eef2ff, #e8edff);
-    border-color: #a3b8ff;
-    box-shadow: 0 2px 8px rgba(0,113,227,0.1);
+    box-shadow: 0 0 0 1px var(--ring), var(--shadow-md);
   }
   .html-preview-card .hpc-icon {
-    width: 40px; height: 40px; border-radius: 10px;
-    background: linear-gradient(135deg, #0071e3, #34c759);
+    width: 40px; height: 40px; border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--accent);
     display: flex; align-items: center; justify-content: center;
-    font-size: 18px; flex-shrink: 0;
+    flex-shrink: 0;
   }
   .html-preview-card .hpc-info { flex: 1; min-width: 0; }
   .html-preview-card .hpc-title {
@@ -737,15 +765,22 @@
 
   /* Overview card (top dark card) */
   .gp-overview {
-    background: linear-gradient(135deg, #1a1a2e, #16213e);
-    border-radius: 14px; padding: 20px; color: white;
+    background: var(--fg);
+    border-radius: var(--radius-lg); padding: 22px; color: var(--user-text);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.04);
   }
-  .gp-overview-top { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-  .gp-overview-icon { width: 28px; height: 28px; filter: brightness(0) invert(1); }
-  .gp-overview-title { font-weight: 700; font-size: 1.1rem; }
+  .gp-overview-top { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .gp-overview-icon { width: 28px; height: 28px; filter: brightness(0) invert(1); opacity: 0.9; }
+  .gp-overview-title { font-family: var(--font-display); font-weight: 500; font-size: 1.15rem; letter-spacing: -0.01em; }
   .gp-overview-dots { font-size: 0.82rem; margin-bottom: 8px; letter-spacing: 2px; }
-  .gp-overview-stats { font-size: 0.78rem; color: rgba(255,255,255,0.7); }
-  .gp-overview-stats span { margin-right: 10px; }
+  .gp-overview-stats { font-size: 0.78rem; display: flex; gap: 8px; flex-wrap: wrap; }
+  .gp-overview-stats .gp-stat-chip {
+    padding: 2px 10px;
+    border-radius: var(--radius-pill);
+    background: rgba(255,255,255,0.08);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.14);
+    color: rgba(255,255,255,0.88);
+  }
   .gp-overview-row { display: flex; justify-content: space-between; font-size: 0.75rem; color: rgba(255,255,255,0.55); margin-top: 6px; }
 
   /* Skill evolution card */
@@ -761,9 +796,9 @@
   .gp-source-tag {
     font-size: 0.65rem; padding: 1px 8px; border-radius: 10px; font-weight: 500; white-space: nowrap;
   }
-  .gp-source-builtin { background: rgba(0,122,255,0.1); color: #007aff; }
-  .gp-source-extracted { background: rgba(52,199,89,0.1); color: #34c759; }
-  .gp-source-user { background: rgba(175,82,222,0.1); color: #af52de; }
+  .gp-source-builtin { background: rgba(201,100,66,0.1); color: #c96442; }
+  .gp-source-extracted { background: rgba(122,138,111,0.1); color: #7a8a6f; }
+  .gp-source-user { background: var(--bg-tertiary); color: var(--fg-secondary); }
   .gp-skill-desc { font-size: 0.75rem; color: var(--fg-muted); margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* Maturity stages */
@@ -818,21 +853,21 @@
     background: rgba(0,0,0,0.02);
   }
   .session-card.active {
-    background: rgba(0,113,227,0.06);
+    background: rgba(201,100,66,0.06);
     border-left: 2px solid var(--accent);
   }
   .session-card.session-card-opp {
     margin: 8px 12px;
     border-radius: 10px;
-    background: linear-gradient(135deg, rgba(0,113,227,0.06), rgba(0,113,227,0.02));
-    border: 0.5px solid rgba(0,113,227,0.15);
+    background: linear-gradient(135deg, rgba(201,100,66,0.06), rgba(201,100,66,0.02));
+    border: 0.5px solid rgba(201,100,66,0.15);
     border-left: 3px solid var(--accent);
   }
   .session-card.session-card-opp:hover {
-    background: linear-gradient(135deg, rgba(0,113,227,0.1), rgba(0,113,227,0.04));
+    background: linear-gradient(135deg, rgba(201,100,66,0.1), rgba(201,100,66,0.04));
   }
   .session-card.session-card-opp.active {
-    background: linear-gradient(135deg, rgba(0,113,227,0.12), rgba(0,113,227,0.06));
+    background: linear-gradient(135deg, rgba(201,100,66,0.12), rgba(201,100,66,0.06));
     border-color: var(--accent);
   }
   .session-tag {
@@ -841,7 +876,7 @@
     margin-right: 6px;
     font-size: 0.65rem;
     font-weight: 600;
-    background: rgba(0,113,227,0.1);
+    background: rgba(201,100,66,0.1);
     color: var(--accent);
     border-radius: var(--radius-pill);
     vertical-align: middle;
@@ -974,6 +1009,55 @@
   .memory-rendered p { margin: 4px 0; }
   .memory-rendered ul { padding-left: 16px; margin: 4px 0; }
   .memory-rendered li { margin: 2px 0; }
+
+  /* Memory index cards (MEMORY.md 索引) */
+  .memory-index { display: flex; flex-direction: column; gap: 8px; }
+  .memory-card {
+    padding: 8px 10px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 0 0 1px var(--border-light);
+  }
+  .memory-card-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 3px;
+    flex-wrap: wrap;
+  }
+  .memory-type {
+    font-size: 0.62rem;
+    padding: 1px 7px;
+    border-radius: var(--radius-pill);
+    font-weight: 500;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+    flex-shrink: 0;
+  }
+  .memory-type-user      { background: #e8e6dc; color: #4d4c48; }
+  .memory-type-feedback  { background: rgba(201,100,66,0.12); color: #c96442; }
+  .memory-type-project   { background: rgba(122,138,111,0.15); color: #5a6a50; }
+  .memory-type-reference { background: #f0eee6; color: #87867f; }
+  .memory-card-title {
+    font-family: var(--font-display);
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--fg);
+    line-height: 1.3;
+    flex: 1;
+    min-width: 0;
+  }
+  .memory-card-date {
+    font-size: 0.62rem;
+    color: var(--fg-muted);
+    flex-shrink: 0;
+  }
+  .memory-card-summary {
+    font-size: 0.7rem;
+    color: var(--fg-secondary);
+    line-height: 1.5;
+    padding-left: 2px;
+  }
   .sidebar-section-empty {
     color: var(--fg-muted);
     font-size: 0.73rem;
@@ -988,7 +1072,7 @@
   .task-card-time { color:var(--fg-muted); font-size:0.72rem; margin-top:2px; }
   .task-card-skill { color:#6366f1; font-size:0.7rem; margin-top:2px; }
   .task-toggle { width:36px; height:20px; border-radius:10px; border:none; background:#ccc; cursor:pointer; position:relative; transition:background .2s; flex-shrink:0; }
-  .task-toggle.on { background:#34c759; }
+  .task-toggle.on { background:#7a8a6f; }
   .task-toggle::after { content:''; position:absolute; width:16px; height:16px; border-radius:50%; background:white; top:2px; left:2px; transition:left .2s; }
   .task-toggle.on::after { left:18px; }
   .task-del-btn { background:none; border:none; color:var(--fg-muted); cursor:pointer; font-size:0.9rem; padding:2px 4px; flex-shrink:0; }
@@ -1002,11 +1086,11 @@
   .task-form-row { display:flex; gap:8px; }
   .task-form-row > div { flex:1; }
   .task-form-actions { display:flex; gap:8px; margin-top:8px; justify-content:flex-end; }
-  .task-form-cancel, .task-form-save { padding:5px 14px; border-radius:6px; border:none; cursor:pointer; font-size:0.78rem; }
-  .task-form-cancel { background:#f3f4f6; }
-  .task-form-save { background:#4f46e5; color:white; }
-  .task-toast { position:fixed; top:20px; right:20px; background:#1d1d1f; color:white; padding:10px 18px; border-radius:8px; font-size:0.82rem; z-index:9999; animation:fadeIn .3s; }
-  .session-tag { display:inline-block; padding:1px 5px; border-radius:3px; font-size:0.65rem; margin-right:4px; background:#dbeafe; color:#1d4ed8; }
+  .task-form-cancel, .task-form-save { padding:5px 14px; border-radius:var(--radius-sm); border:none; cursor:pointer; font-size:0.78rem; font-family:inherit; }
+  .task-form-cancel { background:var(--bg-tertiary); color:var(--fg-secondary); }
+  .task-form-save { background:var(--accent); color:var(--user-text); }
+  .task-toast { position:fixed; top:20px; right:20px; background:var(--fg); color:var(--user-text); padding:10px 18px; border-radius:var(--radius-sm); font-size:0.82rem; z-index:9999; animation:fadeIn .3s; }
+  .session-tag { display:inline-block; padding:1px 5px; border-radius:3px; font-size:0.65rem; margin-right:4px; background:var(--bg-tertiary); color:var(--fg-secondary); }
 
   /* Skill cards in sidebar */
   .skill-card { padding: 10px 12px; border-bottom: 1px solid var(--border-light); }
@@ -1014,7 +1098,7 @@
   .skill-card-desc { color: var(--fg-muted); font-size: 0.78rem; margin-top: 2px; }
   .skill-card-meta { display: flex; gap: 8px; margin-top: 6px; font-size: 0.72rem; color: var(--fg-muted); align-items: center; }
   .skill-badge { padding: 1px 6px; border-radius: 4px; font-size: 0.7rem; }
-  .skill-badge.builtin { background: #dbeafe; color: #1d4ed8; }
+  .skill-badge.builtin { background: var(--bg-tertiary); color: var(--fg-secondary); }
   .skill-badge.extracted { background: #dcfce7; color: #16a34a; }
   .skill-badge.user_defined { background: #fef3c7; color: #d97706; }
   .skill-trigger { background: var(--bg-tertiary); padding: 1px 5px; border-radius: 3px; font-size: 0.7rem; margin-right: 4px; display: inline-block; margin-top: 4px; }
@@ -1050,7 +1134,7 @@
   /* Toast */
   .task-toast {
     position: fixed; top: 20px; right: 20px; z-index: 10000;
-    background: #007aff; color: white; padding: 12px 20px;
+    background: #c96442; color: white; padding: 12px 20px;
     border-radius: 8px; font-size: 0.85rem; box-shadow: var(--shadow-md);
     animation: toastIn 0.3s ease-out, toastOut 0.3s ease-in 2.7s forwards;
   }
@@ -1152,13 +1236,14 @@
     display: inline-flex;
     width: 48px;
     height: 48px;
-    background: linear-gradient(135deg, #1d1d1f 0%, #424245 100%);
-    border-radius: 12px;
+    background: var(--fg);
+    border-radius: var(--radius-md);
     align-items: center;
     justify-content: center;
-    color: white;
-    font-size: 22px;
-    font-weight: 700;
+    color: var(--accent);
+    font-family: var(--font-display);
+    font-size: 26px;
+    font-weight: 500;
   }
   .auth-title {
     font-family: var(--font-display);
@@ -1181,7 +1266,7 @@
   }
   .auth-input:focus {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(0,113,227,0.1);
+    box-shadow: 0 0 0 3px rgba(201,100,66,0.1);
     background: var(--bg);
   }
   .auth-input::placeholder {
@@ -1322,14 +1407,16 @@
   .welcome-icon {
     width: 72px;
     height: 72px;
-    background: rgba(79,70,229,0.08);
-    border-radius: 18px;
+    background: var(--bg-secondary);
+    border-radius: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
     margin-bottom: 4px;
+    color: var(--accent);
+    box-shadow: 0 0 0 1px var(--border-light), 0 4px 24px rgba(201,100,66,0.06);
   }
-  .welcome-icon svg { width: 36px; height: 36px; }
+  .welcome-icon svg { width: 42px; height: 42px; }
   .welcome-subtitle {
     font-size: 0.95rem;
     color: var(--fg-muted);
@@ -1359,16 +1446,18 @@
   .welcome-card-icon {
     width: 40px;
     height: 40px;
-    border-radius: 10px;
+    border-radius: var(--radius-sm);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 1.1rem;
     margin-bottom: 14px;
+    background: var(--bg-tertiary);
+    color: var(--fg-secondary);
   }
-  .welcome-card:nth-child(1) .welcome-card-icon { background: rgba(79,70,229,0.08); }
-  .welcome-card:nth-child(2) .welcome-card-icon { background: rgba(59,130,246,0.08); }
-  .welcome-card:nth-child(3) .welcome-card-icon { background: rgba(99,102,241,0.08); }
+  .welcome-card-icon svg { width: 20px; height: 20px; }
+  .welcome-card:hover .welcome-card-icon {
+    color: var(--accent);
+  }
   .welcome-card-title {
     font-size: 0.95rem;
     font-weight: 600;
@@ -1597,27 +1686,27 @@
   /* ========== Flow Timeline Panel ========== */
   .todo-panel {
     margin-bottom: 12px;
-    background: linear-gradient(135deg, #f8f9fc 0%, #f0f4ff 100%);
-    border: 1px solid var(--border-light);
+    background: var(--bg-secondary);
     border-radius: var(--radius-md);
-    padding: 14px 18px;
+    padding: 16px 20px;
     font-size: 12px;
+    box-shadow: 0 0 0 1px var(--border-light);
   }
   .todo-panel-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--fg-muted);
-    text-transform: uppercase;
-    letter-spacing: .5px;
-    margin-bottom: 10px;
+    font-family: var(--font-display);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--fg);
+    letter-spacing: 0;
+    margin-bottom: 12px;
   }
   .todo-item {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 6px 0;
+    gap: 12px;
+    padding: 7px 0;
     color: var(--fg-secondary);
-    line-height: 1.4;
+    line-height: 1.5;
     position: relative;
   }
   /* 左侧 timeline 竖线 */
@@ -1626,13 +1715,13 @@
     position: absolute;
     left: 7px;
     top: 26px;
-    bottom: -6px;
-    width: 1.5px;
+    bottom: -7px;
+    width: 1px;
     background: var(--border-light);
   }
   .todo-item[data-status="completed"]:not(:last-child)::after {
-    background: #34c759;
-    opacity: 0.4;
+    background: var(--ring);
+    opacity: 0.6;
   }
   .todo-icon {
     width: 16px;
@@ -1649,18 +1738,23 @@
   .todo-tool-badge {
     display: inline-flex;
     align-items: center;
-    gap: 3px;
-    background: rgba(0,122,255,.08);
-    color: var(--accent);
+    gap: 4px;
+    background: var(--bg-tertiary);
+    color: var(--fg-secondary);
     font-size: 10px;
     padding: 2px 8px;
-    border-radius: 10px;
+    border-radius: var(--radius-pill);
     white-space: nowrap;
     flex-shrink: 0;
+    box-shadow: inset 0 0 0 1px var(--border-light);
+  }
+  .todo-tool-badge svg {
+    width: 10px;
+    height: 10px;
   }
   .todo-item[data-status="completed"] { color: var(--fg-muted); }
-  .todo-item[data-status="completed"] .todo-content { text-decoration: line-through; }
-  .todo-item[data-status="completed"] .todo-icon { color: #34c759; }
+  .todo-item[data-status="completed"] .todo-content { text-decoration: line-through; text-decoration-color: var(--ring); }
+  .todo-item[data-status="completed"] .todo-icon { color: #7a8a6f; }  /* muted sage green */
   .todo-item[data-status="in_progress"] { color: var(--fg); font-weight: 500; }
   .todo-item[data-status="in_progress"] .todo-icon { color: var(--accent); }
   .todo-item[data-status="pending"] .todo-icon { color: var(--fg-muted); }
@@ -1693,7 +1787,7 @@
   .ask-option:last-child { margin-bottom: 0; }
   .ask-option:hover {
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(0,122,255,.08);
+    box-shadow: 0 0 0 3px rgba(201,100,66,.08);
   }
   .ask-option-radio {
     width: 18px;
@@ -1771,8 +1865,8 @@
     padding: 10px 20px;
     border-radius: 999px;
     border: none;
-    background: rgba(0,122,255,.08);
-    color: #007aff;
+    background: rgba(201,100,66,.08);
+    color: #c96442;
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
@@ -1780,10 +1874,10 @@
     white-space: nowrap;
   }
   .action-pill:hover {
-    background: rgba(0,122,255,.15);
-    box-shadow: 0 2px 8px rgba(0,122,255,.12);
+    background: rgba(201,100,66,.15);
+    box-shadow: 0 2px 8px rgba(201,100,66,.12);
   }
-  .action-pill:active { background: rgba(0,122,255,.22); }
+  .action-pill:active { background: rgba(201,100,66,.22); }
   .action-pill .arrow { font-size: 13px; opacity: .7; }
   /* Checkbox card style */
   .action-check-group {
@@ -1855,13 +1949,13 @@
 
   /* ===== Collapsible action-cards ===== */
   .action-collapsible-wrap { margin: 14px 0 4px; }
-  .action-collapsible-header { font-weight: 600; font-size: 15px; color: #1e40af; margin-bottom: 8px; }
-  .action-collapsible-toggle { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 10px; cursor: pointer; transition: background .2s; }
-  .action-collapsible-toggle:hover { background: #dbeafe; }
-  .action-collapsible-toggle.open { border-radius: 10px 10px 0 0; border-bottom: none; }
-  .action-collapsible-title { font-weight: 600; font-size: 14px; color: #1e40af; }
-  .action-collapsible-arrow { font-size: 12px; color: #3b82f6; }
-  .action-collapsible-body { padding: 16px; border: 1px solid #bfdbfe; border-top: none; border-radius: 0 0 10px 10px; background: #fafafa; line-height: 1.8; font-size: 14px; color: #374151; }
+  .action-collapsible-header { font-family: var(--font-display); font-weight: 500; font-size: 15px; color: var(--fg); margin-bottom: 8px; }
+  .action-collapsible-toggle { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); cursor: pointer; transition: background .2s; }
+  .action-collapsible-toggle:hover { background: var(--bg-tertiary); }
+  .action-collapsible-toggle.open { border-radius: var(--radius-md) var(--radius-md) 0 0; border-bottom: none; }
+  .action-collapsible-title { font-family: var(--font-display); font-weight: 500; font-size: 14px; color: var(--fg); }
+  .action-collapsible-arrow { font-size: 12px; color: var(--accent); }
+  .action-collapsible-body { padding: 16px; border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius-md) var(--radius-md); background: var(--bg-secondary); line-height: 1.7; font-size: 14px; color: var(--fg-secondary); }
   .action-collapsible-body.collapsed { display: none; }
 
   /* ===== Amazon Product Card (tool result) ===== */
@@ -1930,7 +2024,7 @@
 
   /* amz-expanded: product card, default open, toggleable */
   .tool-card.amz-expanded { cursor: pointer; }
-  .tool-card.amz-expanded:hover { background: #f0f0f3; }
+  .tool-card.amz-expanded:hover { box-shadow: 0 0 0 1px var(--ring), var(--shadow-md); }
   .tool-collapse-arrow {
     font-size: 9px;
     color: var(--fg-muted);
@@ -2116,25 +2210,34 @@
     <!-- Welcome Screen -->
     <div class="welcome" id="welcome">
       <div class="welcome-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="4" width="18" height="12" rx="2"/><line x1="8" y1="9" x2="8" y2="9.01"/><line x1="16" y1="9" x2="16" y2="9.01"/><path d="M9 16v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2"/><line x1="12" y1="4" x2="12" y2="1"/>
+        <!-- Editorial spark: terracotta gem with two embers -->
+        <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <path d="M24 8 L27.4 20.6 L40 24 L27.4 27.4 L24 40 L20.6 27.4 L8 24 L20.6 20.6 Z" fill="currentColor"/>
+          <circle cx="38.5" cy="11.5" r="2.4" fill="currentColor" opacity="0.55"/>
+          <circle cx="10.5" cy="38.5" r="1.8" fill="currentColor" opacity="0.45"/>
         </svg>
       </div>
       <div class="welcome-title" id="welcomeTitle">你好，我是 EvoAgent</div>
       <div class="welcome-subtitle">你的通用智能助手。输入需求或选择快捷任务开始。</div>
       <div class="welcome-cards">
         <div class="welcome-card" onclick="useCard('帮我搜索一下最新的AI新闻')">
-          <div class="welcome-card-icon">&#x1F50D;</div>
+          <div class="welcome-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>
+          </div>
           <div class="welcome-card-title">搜索信息</div>
           <div class="welcome-card-desc">搜索网页获取实时资讯和数据</div>
         </div>
         <div class="welcome-card" onclick="useCard('创建一个技能')">
-          <div class="welcome-card-icon">&#x2699;</div>
+          <div class="welcome-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3"/></svg>
+          </div>
           <div class="welcome-card-title">创建技能</div>
           <div class="welcome-card-desc">定义可复用的工作流，下次自动触发</div>
         </div>
         <div class="welcome-card" onclick="useCard('帮我生成一张科技风格的产品图')">
-          <div class="welcome-card-icon">&#x1F3A8;</div>
+          <div class="welcome-card-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c1.66 0 3-1.34 3-3 0-.78-.3-1.48-.78-2.01-.47-.53-.75-1.22-.75-1.99 0-1.66 1.34-3 3-3h1.17c2.35 0 4.3-1.65 4.76-3.85.08-.35.1-.7.1-1.15C22 6.5 17.5 2 12 2Z"/></svg>
+          </div>
           <div class="welcome-card-title">生成图片</div>
           <div class="welcome-card-desc">根据描述生成各类风格的图片</div>
         </div>
@@ -2604,24 +2707,48 @@ const TOOL_LABELS = {
   sub_agent: '子代理',
   parent_history: '父 agent 历史',
 };
+// Lucide-style line icons (stroke=currentColor, inherits warm foreground)
+const ICON_PATHS = {
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  palette: '<circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c1.66 0 3-1.34 3-3 0-.78-.3-1.48-.78-2.01-.47-.53-.75-1.22-.75-1.99 0-1.66 1.34-3 3-3h1.17c2.35 0 4.3-1.65 4.76-3.85.08-.35.1-.7.1-1.15C22 6.5 17.5 2 12 2Z"/>',
+  pencil: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
+  eye: '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  save: '<path d="M15.2 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7.8a2 2 0 0 0-.6-1.4L17.6 3.6A2 2 0 0 0 16.2 3z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
+  clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+  news: '<path d="M4 4h16v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+  checkSquare: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="m9 11 3 3L22 4"/>',
+  terminal: '<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>',
+  helpCircle: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  bot: '<rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/><circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/>',
+  history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  wrench: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94L6.91 19.09a2.12 2.12 0 1 1-3-3L11.05 9a6 6 0 0 1 7.94-7.94Z"/>',
+};
+function svgIcon(key) {
+  var d = ICON_PATHS[key] || ICON_PATHS.wrench;
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
+}
 const TOOL_ICONS = {
-  web_search: '🔍',
-  fetch_url: '📄',
-  image_generation: '🎨',
-  image_editing: '✏️',
-  image_understanding: '👁️',
-  image_replication: '🖼️',
-  update_user_profile: '👤',
-  update_memory: '💾',
-  skill_manager: '📋',
-  html_render: '🖼️',
-  reddit_scraper: '📰',
-  todo_manager: '📝',
-  execute_code: '💻',
-  ask_user_question: '❓',
-  schedule_manager: '⏰',
-  sub_agent: '🤖',
-  parent_history: '🧵',
+  web_search: svgIcon('search'),
+  fetch_url: svgIcon('link'),
+  image_generation: svgIcon('palette'),
+  image_editing: svgIcon('pencil'),
+  image_understanding: svgIcon('eye'),
+  image_replication: svgIcon('image'),
+  update_user_profile: svgIcon('user'),
+  update_memory: svgIcon('save'),
+  skill_manager: svgIcon('clipboard'),
+  html_render: svgIcon('image'),
+  reddit_scraper: svgIcon('news'),
+  todo_manager: svgIcon('checkSquare'),
+  execute_code: svgIcon('terminal'),
+  ask_user_question: svgIcon('helpCircle'),
+  schedule_manager: svgIcon('clock'),
+  sub_agent: svgIcon('bot'),
+  parent_history: svgIcon('history'),
 };
 function _normalizeTool(name) {
   return String(name || '').toLowerCase().replace(/_|-/g, '');
@@ -2636,7 +2763,7 @@ function toolLabel(name) {
   return TOOL_LABELS[name] || _TOOL_LABEL_FLAT[_normalizeTool(name)] || name;
 }
 function toolIcon(name) {
-  return TOOL_ICONS[name] || _TOOL_ICON_FLAT[_normalizeTool(name)] || '🔧';
+  return TOOL_ICONS[name] || _TOOL_ICON_FLAT[_normalizeTool(name)] || svgIcon('wrench');
 }
 
 // 技能名称中文映射
@@ -3212,7 +3339,7 @@ function renderTodoPanel(msgDiv, tasks) {
     tasks.map(function(t) {
       var tools = _stepTools[t.id] || [];
       var badges = tools.map(function(tool) {
-        return '<span class="todo-tool-badge">' + tool.icon + ' ' + tool.label + '</span>';
+        return '<span class="todo-tool-badge">' + tool.icon + '<span>' + tool.label + '</span></span>';
       }).join(' ');
       return '<div class="todo-item" data-status="' + (t.status || 'pending') + '">' +
         '<span class="todo-icon">' + (statusIcon[t.status] || '\u25CB') + '</span>' +
@@ -3266,9 +3393,9 @@ async function send() {
   let text = '';
   let displayText = userText;
   if (attachedFile) {
-    text = '\uD83D\uDCCE 文件: ' + attachedFile.name + '\n\n' + attachedFile.content;
+    text = '[文件] ' + attachedFile.name + '\n\n' + attachedFile.content;
     if (userText) text += '\n\n---\n\n' + userText;
-    displayText = '\uD83D\uDCCE ' + attachedFile.name + (userText ? '\n' + userText : '');
+    displayText = '[\u6587\u4EF6] ' + attachedFile.name + (userText ? '\n' + userText : '');
     clearAttachment();
   } else {
     text = userText;
@@ -3367,12 +3494,12 @@ async function send() {
           const footer = document.createElement('div');
           footer.className = 'metrics-line';
           const parts = [];
-          if (m.total_ms) parts.push('⏱ ' + (m.total_ms / 1000).toFixed(1) + 's');
-          if (m.steps) parts.push('🔧 ' + m.steps + ' steps');
+          if (m.total_ms) parts.push((m.total_ms / 1000).toFixed(1) + 's');
+          if (m.steps) parts.push(m.steps + ' steps');
           if (m.tools && m.tools.length) parts.push(m.tools.join(', '));
-          if (m.tokens) parts.push('📦 ' + (m.tokens / 1000).toFixed(1) + 'k tokens');
-          if (m.skill) parts.push('🎯 ' + skillLabel(m.skill.name) + ' (' + m.skill.type + ')');
-          footer.textContent = parts.join(' | ');
+          if (m.tokens) parts.push((m.tokens / 1000).toFixed(1) + 'k tokens');
+          if (m.skill) parts.push(skillLabel(m.skill.name) + ' · ' + m.skill.type);
+          footer.textContent = parts.join(' · ');
           bubble.parentElement.appendChild(footer);
         } else if (event.code === 7) {
           // Scheduled task event
@@ -3543,7 +3670,7 @@ async function updateSession() {
   sendBtn.disabled = true;
   updateBtn.disabled = true;
 
-  addUserMsg('\uD83D\uDD04 更新画像和记忆');
+  addUserMsg('更新画像和记忆');
   const botDiv = createBotMsg();
   const bubble = botDiv.querySelector('.bubble');
   let rawText = '';
@@ -3596,7 +3723,7 @@ async function updateSession() {
                 const card = document.createElement('div');
                 card.className = 'skill-proposal-card';
                 const pJson = JSON.stringify(proposal).replace(/"/g, '&quot;');
-                card.innerHTML = '<div style="font-weight:600;margin-bottom:6px">🎯 发现新技能模式</div>' +
+                card.innerHTML = '<div style="font-weight:500;margin-bottom:6px;font-family:var(--font-display);color:var(--accent)">发现新技能模式</div>' +
                   '<div style="font-weight:500">' + proposal.name + '</div>' +
                   '<div style="color:var(--fg-muted);font-size:0.82rem">' + proposal.description + '</div>' +
                   '<div style="margin-top:8px;display:flex;gap:8px">' +
@@ -4418,7 +4545,7 @@ function insertPreviewCard(bubble, previewId, title, sizeKb) {
   card.className = 'html-preview-card';
   card.dataset.previewId = previewId;
   card.innerHTML =
-    '<div class="hpc-icon">🖼️</div>' +
+    '<div class="hpc-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg></div>' +
     '<div class="hpc-info">' +
       '<div class="hpc-title">' + DOMPurify.sanitize(title) + '</div>' +
       '<div class="hpc-hint">HTML 页面' + (sizeKb ? ' · ' + sizeKb + 'KB' : '') + ' · 点击预览</div>' +
@@ -4444,7 +4571,7 @@ async function fetchAndOpenPreview(previewId, title) {
   // Close other right panels
   if (!growthPanel.classList.contains('hidden')) { growthPanel.classList.add('hidden'); growthToggleBtn.classList.remove('active'); }
   panel.classList.remove('hidden');
-  frame.srcdoc = '<div style="text-align:center;padding:40px;color:#86868b">加载中...</div>';
+  frame.srcdoc = '<div style="text-align:center;padding:40px;color:#87867f">加载中...</div>';
   try {
     const html = await fetchPreviewHtml(previewId);
     frame.srcdoc = html;
@@ -4488,7 +4615,7 @@ async function loadGrowthData() {
     const data = res.ok ? await res.json() : { skills: [], count: 0 };
     renderSkillEvolution(data.skills || []);
   } catch (e) {
-    body.innerHTML = '<div class="gp-empty" style="color:#ff3b30">加载失败</div>';
+    body.innerHTML = '<div class="gp-empty" style="color:#b53333">加载失败</div>';
     console.error('Growth panel error:', e);
   }
 }
@@ -4496,16 +4623,17 @@ async function loadGrowthData() {
 function getSkillMaturity(skill) {
   const u = skill.usage_count || 0;
   const sr = skill.success_rate != null ? skill.success_rate : 1.0;
-  if (u >= 10 && sr >= 0.85) return { stage: 4, name: '精通', color: '#ff9f0a', pct: 100 };
-  if (u >= 4 && sr >= 0.7)   return { stage: 3, name: '成熟', color: '#34c759', pct: 70 };
-  if (u >= 1)                return { stage: 2, name: '成长', color: '#007aff', pct: 40 };
-  return { stage: 1, name: '萌芽', color: '#8e8e93', pct: 10 };
+  // Warm palette: terracotta / sage / coral / stone
+  if (u >= 10 && sr >= 0.85) return { stage: 4, name: '精通', color: '#c96442', pct: 100 };
+  if (u >= 4 && sr >= 0.7)   return { stage: 3, name: '成熟', color: '#7a8a6f', pct: 70 };
+  if (u >= 1)                return { stage: 2, name: '成长', color: '#d97757', pct: 40 };
+  return { stage: 1, name: '萌芽', color: '#87867f', pct: 10 };
 }
 
 function getSourceInfo(skill) {
-  if (skill.source === 'extracted') return { icon: '\uD83C\uDF93', label: '学习', cls: 'gp-source-extracted' };
-  if (skill.source === 'user_defined') return { icon: '\u270F\uFE0F', label: '自定义', cls: 'gp-source-user' };
-  return { icon: '\uD83D\uDCE6', label: '内置', cls: 'gp-source-builtin' };
+  if (skill.source === 'extracted') return { icon: '', label: '学习', cls: 'gp-source-extracted' };
+  if (skill.source === 'user_defined') return { icon: '', label: '自定义', cls: 'gp-source-user' };
+  return { icon: '', label: '内置', cls: 'gp-source-builtin' };
 }
 
 function buildTimeline(skills) {
@@ -4517,7 +4645,7 @@ function buildTimeline(skills) {
       events.push({ date: s.created_at.slice(0, 10), icon: src.icon, text: s.name + ' ' + (actionMap[s.source] || '被添加') });
     }
     if (s.updated_at && s.created_at && s.updated_at.slice(0, 10) !== s.created_at.slice(0, 10)) {
-      events.push({ date: s.updated_at.slice(0, 10), icon: '\uD83D\uDD04', text: s.name + ' 更新至 v' + (s.version || 1) });
+      events.push({ date: s.updated_at.slice(0, 10), icon: '\u2192', text: s.name + ' 更新至 v' + (s.version || 1) });
     }
   }
   events.sort((a, b) => b.date.localeCompare(a.date));
@@ -4555,15 +4683,15 @@ function renderSkillEvolution(skills) {
     '</div>' +
     '<div class="gp-overview-dots">' + dots + ' <span style="font-size:0.72rem;opacity:0.7">' + activatedCount + '/' + skills.length + ' 已激活</span></div>' +
     '<div class="gp-overview-stats">' +
-      '<span>\uD83D\uDCE6 内置 ' + builtinCount + '</span>' +
-      '<span>\uD83C\uDF93 学习 ' + extractedCount + '</span>' +
-      '<span>\u270F\uFE0F 自定义 ' + userCount + '</span>' +
+      '<span class="gp-stat-chip">内置 ' + builtinCount + '</span>' +
+      '<span class="gp-stat-chip">学习 ' + extractedCount + '</span>' +
+      '<span class="gp-stat-chip">自定义 ' + userCount + '</span>' +
     '</div>' +
     '<div class="gp-overview-row"><span>总调用 ' + totalUsage + ' 次</span><span>平均成功率 ' + avgSuccess + '%</span></div>' +
   '</div>';
 
   // B. Skill evolution cards
-  const stages = ['\uD83C\uDF31', '\uD83C\uDF3F', '\uD83C\uDF33', '\u2B50'];
+  const stages = ['\u25CB', '\u25D1', '\u25D0', '\u25CF'];
   skills.sort((a, b) => (b.usage_count || 0) - (a.usage_count || 0));
   for (const s of skills) {
     const m = getSkillMaturity(s);
