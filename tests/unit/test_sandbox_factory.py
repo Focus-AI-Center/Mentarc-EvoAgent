@@ -15,21 +15,24 @@ def test_local_mode_returns_subprocess(monkeypatch):
     monkeypatch.delenv("MINIO_ENDPOINT", raising=False)
     monkeypatch.delenv("SANDBOX_BACKEND", raising=False)
     backend = make_sandbox_backend()
-    assert type(backend).__name__ == "LocalSubprocessBackend"
+    inner = getattr(backend, "_inner", backend)
+    assert type(inner).__name__ == "LocalSubprocessBackend"
 
 
 def test_minio_mode_returns_docker(monkeypatch):
     monkeypatch.setenv("MINIO_ENDPOINT", "http://example.com:9000")
     monkeypatch.delenv("SANDBOX_BACKEND", raising=False)
     backend = make_sandbox_backend()
-    assert type(backend).__name__ == "RemoteDockerBackend"
+    inner = getattr(backend, "_inner", backend)
+    assert type(inner).__name__ == "SessionDockerBackend"
 
 
 def test_minio_mode_explicit_docker(monkeypatch):
     monkeypatch.setenv("MINIO_ENDPOINT", "http://example.com:9000")
     monkeypatch.setenv("SANDBOX_BACKEND", "docker")
     backend = make_sandbox_backend()
-    assert type(backend).__name__ == "RemoteDockerBackend"
+    inner = getattr(backend, "_inner", backend)
+    assert type(inner).__name__ == "SessionDockerBackend"
 
 
 def test_local_mode_with_docker_request_fails(monkeypatch):

@@ -50,6 +50,7 @@ dependencies = [
 
     "openai>=1.50,<2.0",
     "openai-agents>=0.1,<0.3",
+    "mcp>=1.0,<2.0",
     "tiktoken>=0.7,<1.0",
     "tavily-python>=0.3,<1.0",
 
@@ -66,6 +67,7 @@ dependencies = [
 
     # Storage (MinIO mode only; LOCAL mode does not import minio).
     "minio>=7.2,<8.0",
+    "docker>=7.0,<8.0",
 
     # Observability — Prometheus client; /metrics endpoint serves the snapshot.
     "prometheus-client>=0.20,<1.0",

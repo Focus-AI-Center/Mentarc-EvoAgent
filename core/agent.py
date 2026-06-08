@@ -29,6 +29,7 @@ from configs.settings import (
     PROXY_SERVER,
 )
 from core.agent_compat import convert_tools
+from core.mcp import MCPToolManager
 from core.plugins import PLUGIN_CLASSES, initialize_plugins
 from core.plugins.ask_user import AskUserQuestionTool
 from core.plugins.internal import (
@@ -125,7 +126,12 @@ class EvoAgent:
             self.plugin_names = list(PLUGIN_CLASSES.keys())
         else:
             self.plugin_names = [p.strip() for p in DEFAULT_PLUGINS.split(",") if p.strip()]
-        self.tools = initialize_plugins(self.plugin_names, user_id=user_id, workspace=self.workspace)
+        self.tools = initialize_plugins(
+            self.plugin_names,
+            user_id=user_id,
+            session_id=session_id,
+            workspace=self.workspace,
+        )
 
         # Internal tools (always loaded)
         self.tools.append(UpdateUserProfileTool(user_id=user_id, workspace=self.workspace))
@@ -471,11 +477,17 @@ class EvoAgent:
 
     # --- Agent Execution ---
 
-    def _create_sdk_agent(self) -> "_SDKAgent":
+    async def _create_sdk_agent(self) -> "_SDKAgent":
         """Create an OpenAI Agents SDK Agent for LLM + tool loop execution."""
         _ensure_sdk_client()
 
         sdk_tools = convert_tools(self.tools)
+        mcp_tools = await MCPToolManager(
+            user_id=self.user_id,
+            session_id=self.session_id,
+            workspace=self.workspace,
+        ).create_tools(existing_names={getattr(t, "name", "") for t in sdk_tools})
+        sdk_tools.extend(mcp_tools)
 
         return _SDKAgent(
             name="EvoAgent",
@@ -499,7 +511,7 @@ class EvoAgent:
         # Add user message to history BEFORE running agent
         self.history.append({"role": "user", "content": user_input})
 
-        agent = self._create_sdk_agent()
+        agent = await self._create_sdk_agent()
         result = Runner.run_streamed(agent, input=input_messages, max_turns=MAX_STEPS)
 
         async for event in _stream_sdk_events(result, self.tools):

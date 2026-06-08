@@ -412,6 +412,18 @@ class Workspace:
                 added += 1
         return {"added": added, "updated": updated}
 
+    # ── MCP config ───────────────────────────────────────────────────────
+
+    def mcp_config_load(self) -> dict:
+        """Load optional user MCP registry from ``.meta/mcp.json``.
+
+        Missing or malformed files return an empty registry. The file is not
+        seeded by default and is intentionally separate from prompt/skill
+        storage so MCP remains an opt-in user configuration.
+        """
+        data = self._read_json(self._key(".meta", "mcp.json"), default={})
+        return data if isinstance(data, dict) else {}
+
     # ── Images ───────────────────────────────────────────────────────────
 
     def image_write(self, filename: str, data: bytes) -> bool:

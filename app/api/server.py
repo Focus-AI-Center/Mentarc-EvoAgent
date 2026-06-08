@@ -137,6 +137,19 @@ async def health():
     return {"status": "ok"}
 
 
+@app.on_event("shutdown")
+async def _shutdown_mcp_sessions():
+    """Close long-lived MCP exec sessions and shared sandbox containers."""
+    try:
+        from core.mcp import close_all_sandbox_stdio_sessions
+        from core.plugins.sandbox.session_docker import close_all_session_sandboxes
+
+        await close_all_sandbox_stdio_sessions()
+        await close_all_session_sandboxes()
+    except Exception as exc:  # pragma: no cover - best-effort cleanup
+        logger.warning(f"MCP sandbox session cleanup failed: {exc}")
+
+
 @app.get("/metrics")
 async def metrics():
     """Prometheus exposition endpoint.

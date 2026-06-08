@@ -101,6 +101,7 @@ class RemoteDockerBackend:
         self,
         *,
         user_id: str,
+        session_id: str | None = None,
         cwd: str,
         code: str,
         language: str,

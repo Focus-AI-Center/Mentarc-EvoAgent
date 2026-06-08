@@ -6,10 +6,10 @@ Two implementations:
   the server, scoped to the user's workspace directory. Used in LOCAL mode
   (``MINIO_ENDPOINT`` empty). Single-tenant / trusted-host only.
 
-- ``RemoteDockerBackend`` — one-shot container per invocation, talking to a
-  Docker daemon (local socket or remote SSH/TCP). The container mounts the
-  bucket via s3fs from inside, so the sandbox sees a real ``/workspace`` tree
-  that round-trips through MinIO. Used in MINIO mode.
+- ``SessionDockerBackend`` — one long-lived container per ``(user_id, session_id)``
+  in MINIO mode. The container mounts the bucket via s3fs once, then
+  ``execute_code`` and stdio MCP servers run through Docker exec in that same
+  session sandbox.
 
 Selection happens at startup via the same ``MINIO_ENDPOINT`` switch as the
 storage backend (the two are paired — a LOCAL storage with a remote sandbox,
@@ -64,6 +64,7 @@ class SandboxBackend(Protocol):
         self,
         *,
         user_id: str,
+        session_id: str | None = None,
         cwd: str,
         code: str,
         language: str,
@@ -71,12 +72,11 @@ class SandboxBackend(Protocol):
         memory_mb: int,
         network: bool,
     ) -> SandboxResult:
-        """Execute ``code`` in a fresh sandbox scoped to ``user_id``.
+        """Execute ``code`` in a sandbox scoped to ``user_id``.
 
-        ``cwd`` is the workspace-relative subdirectory; backends translate it
-        to the appropriate absolute path inside the sandbox. ``timeout_s``
-        is enforced both by the backend (e.g. ``prlimit --cpu`` / container
-        ``stop``) and by an outer wall-clock guard.
+        In LOCAL mode this remains a subprocess. In MINIO mode v1 uses a
+        session container keyed by ``(user_id, session_id)`` so ``execute_code``
+        and stdio MCP share runtime state.
         """
 
 
@@ -87,7 +87,7 @@ def make_sandbox_backend() -> SandboxBackend:
     ``MINIO_ENDPOINT``):
 
     - ``MINIO_ENDPOINT`` unset    → ``LocalSubprocessBackend``
-    - ``MINIO_ENDPOINT`` set      → backend per ``SANDBOX_BACKEND``
+    - ``MINIO_ENDPOINT`` set      → session Docker backend per ``SANDBOX_BACKEND``
                                     (``docker`` default; ``k8s`` rejected
                                     until M5).
 
@@ -121,9 +121,9 @@ def make_sandbox_backend() -> SandboxBackend:
             f"Unknown SANDBOX_BACKEND={chosen!r}. Supported: 'docker' (default)."
         )
     from .metrics import MetricsSandboxBackend
-    from .remote_docker import RemoteDockerBackend
+    from .session_docker import get_session_docker_backend
 
-    return MetricsSandboxBackend(RemoteDockerBackend(), label="docker")
+    return MetricsSandboxBackend(get_session_docker_backend(), label="docker-session")
 
 
 __all__ = [

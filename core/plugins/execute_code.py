@@ -11,10 +11,9 @@ Two backends exist (chosen automatically by the storage mode — see
     ``subprocess.run`` scoped to the user's workspace directory. Single-tenant
     / trusted-host only; no kernel-level isolation.
 
-  - ``RemoteDockerBackend`` (MINIO mode, ``MINIO_ENDPOINT`` set) — one-shot
-    container per invocation, s3fs-mounts only the user's bucket prefix
-    (``{bucket}:/{user_id}``) at ``/workspace`` so the container's FUSE view
-    cannot see other users' data.
+  - ``SessionDockerBackend`` (MINIO mode, ``MINIO_ENDPOINT`` set) — one
+    long-lived container per ``(user_id, session_id)``. ``execute_code`` and
+    stdio MCP servers run in that same container via Docker exec.
 
 Validation kept at this layer (backend-agnostic):
 
@@ -130,6 +129,7 @@ class ExecuteCodeTool(BaseTool):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._user_id = kwargs.get("user_id") or "anonymous"
+        self._session_id = kwargs.get("session_id") or "default"
 
     async def __call__(self, params: ExecuteCodeParams) -> str:
         code = (params.code or "").strip()
@@ -181,13 +181,14 @@ class ExecuteCodeTool(BaseTool):
             )
 
         logger.debug(
-            f"execute_code user={self._user_id} lang={lang} cwd={rel_cwd or '.'} "
+            f"execute_code user={self._user_id} session={self._session_id} lang={lang} cwd={rel_cwd or '.'} "
             f"timeout={timeout}s backend={type(backend).__name__}"
         )
 
         try:
             result: SandboxResult = await backend.run(
                 user_id=self._user_id,
+                session_id=self._session_id,
                 cwd=rel_cwd,
                 code=code,
                 language=lang,

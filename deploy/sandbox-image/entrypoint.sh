@@ -3,6 +3,7 @@
 #
 # Reads env: MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET,
 #            USER_ID, REL_CWD, LANGUAGE, TIMEOUT_S, CODE
+#            SANDBOX_SESSION_MODE=1 keeps the mounted sandbox alive for docker exec.
 # Writes:    stdout / stderr (captured by docker logs)
 # Exit:      the inner command's return code (124 = timed out)
 #
@@ -109,6 +110,11 @@ cd "$TARGET_CWD" || { echo "sandbox-entrypoint: cd $TARGET_CWD failed" >&2; exit
 # (root-owned) are the only places the keys live, and `sandbox` UID can
 # read neither.
 unset MINIO_ACCESS_KEY MINIO_SECRET_KEY
+
+if [ "${SANDBOX_SESSION_MODE:-}" = "1" ]; then
+    echo "sandbox-entrypoint: session sandbox ready for USER_ID=$USER_ID" >&2
+    while true; do sleep 3600; done
+fi
 
 # Execute as the unprivileged sandbox user. `runuser -u sandbox --` resets
 # the environment to a minimal default; we forward only what the inner

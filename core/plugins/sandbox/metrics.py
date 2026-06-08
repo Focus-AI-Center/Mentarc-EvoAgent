@@ -46,6 +46,9 @@ class MetricsSandboxBackend:
         self._inner = inner
         self._label = label
 
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
     async def run(self, **kwargs: Any) -> SandboxResult:
         backend_label = self._label
         language = kwargs.get("language", "?")
