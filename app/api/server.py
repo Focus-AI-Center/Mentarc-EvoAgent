@@ -132,6 +132,23 @@ async def root():
     )
 
 
+@app.on_event("startup")
+async def _cleanup_orphaned_sandbox_sessions():
+    """Remove session sandbox containers left by a previous worker."""
+    if os.getenv("SANDBOX_SESSION_CLEANUP_ON_START", "1").strip().lower() in ("0", "false", "no", "off"):
+        return
+    if not os.getenv("MINIO_ENDPOINT", "").strip():
+        return
+    try:
+        from core.plugins.sandbox.session_docker import cleanup_orphaned_session_sandboxes
+
+        removed = await cleanup_orphaned_session_sandboxes()
+        if removed:
+            logger.info(f"sandbox.session startup cleanup removed {removed} orphaned container(s)")
+    except Exception as exc:  # pragma: no cover - best-effort cleanup
+        logger.warning(f"Sandbox session startup cleanup failed: {exc}")
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}

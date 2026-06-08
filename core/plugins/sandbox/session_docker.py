@@ -433,6 +433,40 @@ class SessionDockerBackend:
             self._sessions.clear()
         await asyncio.gather(*(s.close() for s in sessions), return_exceptions=True)
 
+    async def cleanup_orphaned_containers(self) -> int:
+        """Remove session sandbox containers left by a previous API process.
+
+        Session state lives in this process, so after a non-graceful restart we
+        cannot safely reattach to old containers or their MCP exec processes.
+        Startup cleanup keeps the sandbox host from accumulating stale FUSE
+        mounts and long-lived containers.
+        """
+        client = self._get_client()
+
+        def _list():
+            return client.containers.list(
+                all=True,
+                filters={"label": "evoagent.kind=session-sandbox"},
+            )
+
+        containers = await asyncio.to_thread(_list)
+        removed = 0
+        for container in containers:
+            cid = getattr(container, "short_id", "") or getattr(container, "id", "")[:12]
+            labels = getattr(container, "labels", {}) or {}
+            user_id = labels.get("evoagent.user_id", "?")
+            session_id = labels.get("evoagent.session_id", "?")
+            logger.info(
+                "sandbox.session cleanup orphaned "
+                f"user={user_id} session={session_id} container={cid}"
+            )
+            try:
+                await asyncio.to_thread(container.remove, force=True, v=True)
+                removed += 1
+            except Exception as exc:
+                logger.warning(f"sandbox.session orphan cleanup failed container={cid}: {exc}")
+        return removed
+
 
 _BACKEND: SessionDockerBackend | None = None
 
@@ -449,10 +483,15 @@ async def close_all_session_sandboxes() -> None:
         await _BACKEND.close_all()
 
 
+async def cleanup_orphaned_session_sandboxes() -> int:
+    return await get_session_docker_backend().cleanup_orphaned_containers()
+
+
 __all__ = [
     "DockerSandboxSession",
     "SessionDockerBackend",
     "SandboxSessionKey",
     "get_session_docker_backend",
     "close_all_session_sandboxes",
+    "cleanup_orphaned_session_sandboxes",
 ]
