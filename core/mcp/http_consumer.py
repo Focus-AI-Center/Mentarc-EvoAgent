@@ -84,9 +84,11 @@ class HTTPMCPConsumer:
                     result = await session.call_tool(tool, args or {})
                     return {
                         "content": _content_to_jsonable(getattr(result, "content", []) or []),
-                        "is_error": bool(getattr(result, "isError", False) or getattr(result, "is_error", False)),
+                        "is_error": bool(
+                            getattr(result, "isError", False) or getattr(result, "is_error", False)
+                        ),
                     }
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {"error": f"MCP tool {self.server.name}/{tool} timed out", "error_type": "timeout"}
         except Exception as exc:
             return {"error": f"{type(exc).__name__}: {exc}", "error_type": "transport_error"}

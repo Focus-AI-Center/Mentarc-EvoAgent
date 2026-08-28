@@ -47,18 +47,14 @@ def _compute_sync_version() -> str:
         for f in sorted(_DEFAULTS_SKILLS_DIR.rglob("*")):
             if f.is_file():
                 st = f.stat()
-                parts.append(
-                    f"{f.relative_to(_DEFAULTS_SKILLS_DIR)}:{st.st_mtime_ns}:{st.st_size}"
-                )
+                parts.append(f"{f.relative_to(_DEFAULTS_SKILLS_DIR)}:{st.st_mtime_ns}:{st.st_size}")
     return hashlib.md5("\n".join(parts).encode()).hexdigest() if parts else ""
 
 
 _SYNC_VERSION: str = _compute_sync_version()
 
 
-def _scan_skill_dirs(
-    base_dir: Path, prefix: str = ""
-) -> list[tuple[str, Path, list[tuple[str, Path]]]]:
+def _scan_skill_dirs(base_dir: Path, prefix: str = "") -> list[tuple[str, Path, list[tuple[str, Path]]]]:
     """Recursively scan a template tree for skills + their reference files."""
     results: list[tuple[str, Path, list[tuple[str, Path]]]] = []
     if not base_dir.exists():
@@ -84,9 +80,7 @@ def _scan_skill_dirs(
         base_name = yaml_name or dir_name
         skill_name = f"{prefix}/{base_name}" if prefix else base_name
         sub_skill_dirs = {
-            child.name
-            for child in entry.iterdir()
-            if child.is_dir() and (child / "SKILL.md").exists()
+            child.name for child in entry.iterdir() if child.is_dir() and (child / "SKILL.md").exists()
         }
         ref_files: list[tuple[str, Path]] = []
         for f in sorted(entry.rglob("*")):
@@ -143,9 +137,7 @@ class Workspace:
         # First part is always trusted (one of our subdirs).
         out = [self.user_id, parts[0]]
         for p in parts[1:]:
-            _validate_segment(
-                p, allow_slash=parts[0] in ("skills", "previews", "sessions", "images")
-            )
+            _validate_segment(p, allow_slash=parts[0] in ("skills", "previews", "sessions", "images"))
             out.append(p)
         return "/".join(out)
 
@@ -183,9 +175,7 @@ class Workspace:
             return default
 
     def _write_json(self, key: str, data) -> None:
-        self._backend.write_text_sync(
-            key, json.dumps(data, ensure_ascii=False, indent=2)
-        )
+        self._backend.write_text_sync(key, json.dumps(data, ensure_ascii=False, indent=2))
 
     def _exists(self, key: str) -> bool:
         return self._backend.head_etag_sync(key) is not None
@@ -211,9 +201,7 @@ class Workspace:
                 # SOUL.md is platform-owned: always overwrite.
                 # Others: only seed if missing (preserve user edits).
                 if md.name == "SOUL.md" or not self._exists(target):
-                    self._write_text(
-                        target, md.read_text(encoding="utf-8")
-                    )
+                    self._write_text(target, md.read_text(encoding="utf-8"))
 
         self.sync_builtin_skills()
         self._write_text(version_key, _SYNC_VERSION)
@@ -372,11 +360,7 @@ class Workspace:
             "skills": self.clear_skills(),
             "images": self.clear_images(),
             "previews": self.clear_previews(),
-            "prompts": sum(
-                1
-                for k in self._list(f"{self.user_id}/prompts/")
-                if k.endswith(".md")
-            ),
+            "prompts": sum(1 for k in self._list(f"{self.user_id}/prompts/") if k.endswith(".md")),
         }
         self._delete(self._user_prefix())
         return cleared
@@ -395,15 +379,9 @@ class Workspace:
             refs_prefix = self._key("skills", skill_name, "references") + "/"
             self._delete(refs_prefix)
             for rel, file_path in ref_files:
-                norm = (
-                    rel[len("references/") :]
-                    if rel.startswith("references/")
-                    else rel
-                )
+                norm = rel[len("references/") :] if rel.startswith("references/") else rel
                 try:
-                    self.skill_ref_set(
-                        skill_name, norm, file_path.read_text(encoding="utf-8")
-                    )
+                    self.skill_ref_set(skill_name, norm, file_path.read_text(encoding="utf-8"))
                 except (OSError, UnicodeDecodeError):
                     pass
             if skill_name in existing:
@@ -497,11 +475,7 @@ class Workspace:
     # ── Snapshot ─────────────────────────────────────────────────────────
 
     def export_snapshot(self) -> dict:
-        prompts = {
-            name: self.read_prompt(name)
-            for name in self.list_prompts()
-            if self.read_prompt(name)
-        }
+        prompts = {name: self.read_prompt(name) for name in self.list_prompts() if self.read_prompt(name)}
         skills = {}
         for name, content in self.skill_get_all().items():
             skills[name] = {"content": content, "refs": self.skill_refs_get(name)}
@@ -545,17 +519,13 @@ class Workspace:
                 for ref_name, ref_content in (payload.get("refs") or {}).items():
                     if isinstance(ref_name, str) and isinstance(ref_content, str):
                         self.skill_ref_set(skill_name, ref_name, ref_content)
-        for sid, record in (
-            snapshot.get("sessions", {}).get("records") or {}
-        ).items():
+        for sid, record in (snapshot.get("sessions", {}).get("records") or {}).items():
             if isinstance(sid, str) and isinstance(record, dict):
                 self.history_save(sid, record)
         for filename, b64_data in (snapshot.get("images") or {}).items():
             if isinstance(filename, str) and isinstance(b64_data, str):
                 try:
-                    self.image_write(
-                        filename, base64.b64decode(b64_data.encode("ascii"))
-                    )
+                    self.image_write(filename, base64.b64decode(b64_data.encode("ascii")))
                 except ValueError:
                     pass
         for preview_id, html in (snapshot.get("previews") or {}).items():

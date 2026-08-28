@@ -57,20 +57,16 @@ class MetricsSandboxBackend:
         try:
             result = await self._inner.run(**kwargs)
         except Exception:
-            SANDBOX_EXEC_DURATION.labels(
-                backend=backend_label, language=language, outcome="error"
-            ).observe(time.monotonic() - start)
+            SANDBOX_EXEC_DURATION.labels(backend=backend_label, language=language, outcome="error").observe(
+                time.monotonic() - start
+            )
             SANDBOX_ACTIVE.labels(backend=backend_label).dec()
             raise
 
         SANDBOX_ACTIVE.labels(backend=backend_label).dec()
         # Prefer the backend's reported duration (closer to inner timing); fall
         # back to wall-clock if the backend didn't fill it in.
-        duration_s = (
-            result.duration_ms / 1000.0
-            if result.duration_ms
-            else time.monotonic() - start
-        )
+        duration_s = result.duration_ms / 1000.0 if result.duration_ms else time.monotonic() - start
         SANDBOX_EXEC_DURATION.labels(
             backend=backend_label, language=language, outcome=_outcome(result)
         ).observe(duration_s)

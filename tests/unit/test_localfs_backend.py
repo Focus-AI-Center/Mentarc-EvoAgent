@@ -105,26 +105,20 @@ async def test_if_match_conflict(backend):
 
 async def test_if_match_absent_creates(backend):
     """if_match='' means the key must not exist (analog of If-None-Match: *)."""
-    etag = await backend.write_text(
-        "alice/prompts/new.md", "first", if_match=IF_MATCH_ABSENT
-    )
+    etag = await backend.write_text("alice/prompts/new.md", "first", if_match=IF_MATCH_ABSENT)
     assert etag == _md5_hex(b"first")
 
 
 async def test_if_match_absent_conflict_when_present(backend):
     await backend.write_text("alice/prompts/E.md", "exists")
     with pytest.raises(ETagMismatchError):
-        await backend.write_text(
-            "alice/prompts/E.md", "again", if_match=IF_MATCH_ABSENT
-        )
+        await backend.write_text("alice/prompts/E.md", "again", if_match=IF_MATCH_ABSENT)
 
 
 async def test_if_match_against_missing_key(backend):
     """if_match=<etag> on a missing key → mismatch (current=None)."""
     with pytest.raises(ETagMismatchError):
-        await backend.write_text(
-            "alice/prompts/new.md", "x", if_match="cafef00d"
-        )
+        await backend.write_text("alice/prompts/new.md", "x", if_match="cafef00d")
 
 
 # ── list_keys ────────────────────────────────────────────────────────────

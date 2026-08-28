@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from core.plugins import initialize_plugins
 from core.plugins import execute_code as execute_code_module
+from core.plugins import initialize_plugins
 from core.plugins.sandbox import SandboxResult
 
 

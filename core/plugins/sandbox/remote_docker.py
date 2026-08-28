@@ -70,9 +70,7 @@ class RemoteDockerBackend:
         self.minio_endpoint = minio_endpoint or os.getenv("MINIO_ENDPOINT", "")
         self.minio_access_key = minio_access_key or os.getenv("MINIO_ACCESS_KEY", "")
         self.minio_secret_key = minio_secret_key or os.getenv("MINIO_SECRET_KEY", "")
-        self.minio_bucket = minio_bucket or os.getenv(
-            "MINIO_BUCKET", "evoagent-workspaces"
-        )
+        self.minio_bucket = minio_bucket or os.getenv("MINIO_BUCKET", "evoagent-workspaces")
         # Lazy: build client on first use so importing this module on a host
         # without Docker is fine (factory still rejects, but tests can import).
         self._client = None
@@ -112,8 +110,7 @@ class RemoteDockerBackend:
         sandbox_label = f"docker({self.image},net={self.network})"
         if not self.minio_endpoint or not self.minio_access_key or not self.minio_secret_key:
             raise SandboxStartupError(
-                "RemoteDockerBackend requires MINIO_ENDPOINT / MINIO_ACCESS_KEY / "
-                "MINIO_SECRET_KEY to be set"
+                "RemoteDockerBackend requires MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY to be set"
             )
         env = {
             "MINIO_ENDPOINT": self.minio_endpoint,
@@ -149,19 +146,11 @@ class RemoteDockerBackend:
         t0 = time.time()
         container = None
         try:
-            container = await asyncio.to_thread(
-                client.containers.run, **host_config
-            )
-            wait_result = await asyncio.to_thread(
-                container.wait, timeout=timeout_s + 30
-            )
+            container = await asyncio.to_thread(client.containers.run, **host_config)
+            wait_result = await asyncio.to_thread(container.wait, timeout=timeout_s + 30)
             return_code = int(wait_result.get("StatusCode", -1))
-            stdout_bytes = await asyncio.to_thread(
-                container.logs, stdout=True, stderr=False
-            )
-            stderr_bytes = await asyncio.to_thread(
-                container.logs, stdout=False, stderr=True
-            )
+            stdout_bytes = await asyncio.to_thread(container.logs, stdout=True, stderr=False)
+            stderr_bytes = await asyncio.to_thread(container.logs, stdout=False, stderr=True)
             stdout = stdout_bytes.decode("utf-8", errors="replace")
             stderr = stderr_bytes.decode("utf-8", errors="replace")
         except Exception as err:
@@ -176,13 +165,9 @@ class RemoteDockerBackend:
         finally:
             if container is not None:
                 try:
-                    await asyncio.to_thread(
-                        container.remove, force=True, v=True
-                    )
+                    await asyncio.to_thread(container.remove, force=True, v=True)
                 except Exception as err:
-                    logger.warning(
-                        f"sandbox.docker container cleanup failed for user={user_id}: {err}"
-                    )
+                    logger.warning(f"sandbox.docker container cleanup failed for user={user_id}: {err}")
 
         out, t1 = _truncate(stdout)
         err_text, t2 = _truncate(stderr)

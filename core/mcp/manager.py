@@ -61,7 +61,9 @@ class MCPToolManager:
                 seen.add(name)
                 tools.append(tool)
         if tools:
-            logger.info(f"[mcp-manager] loaded {len(tools)} MCP tools for user={self.user_id} session={self.session_id}")
+            logger.info(
+                f"[mcp-manager] loaded {len(tools)} MCP tools for user={self.user_id} session={self.session_id}"
+            )
         return tools
 
 

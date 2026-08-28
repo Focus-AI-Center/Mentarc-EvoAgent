@@ -158,9 +158,7 @@ async def test_if_match_absent_conflict_when_present(backend, run_prefix):
 
 async def test_if_match_against_missing_key(backend, run_prefix):
     with pytest.raises(ETagMismatchError):
-        await backend.write_text(
-            f"{run_prefix}/new.md", "x", if_match="cafef00d"
-        )
+        await backend.write_text(f"{run_prefix}/new.md", "x", if_match="cafef00d")
 
 
 # ── list_keys ────────────────────────────────────────────────────────────

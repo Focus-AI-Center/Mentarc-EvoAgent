@@ -117,9 +117,7 @@ def make_sandbox_backend() -> SandboxBackend:
             "use SANDBOX_BACKEND=docker (default) for now."
         )
     if chosen != "docker":
-        raise RuntimeError(
-            f"Unknown SANDBOX_BACKEND={chosen!r}. Supported: 'docker' (default)."
-        )
+        raise RuntimeError(f"Unknown SANDBOX_BACKEND={chosen!r}. Supported: 'docker' (default).")
     from .metrics import MetricsSandboxBackend
     from .session_docker import get_session_docker_backend
 

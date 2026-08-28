@@ -49,7 +49,7 @@ class LocalSubprocessBackend:
         memory_mb: int,
         network: bool,
     ) -> SandboxResult:
-        ws_dir = (Path(WORKSPACE_ROOT).resolve() / user_id)
+        ws_dir = Path(WORKSPACE_ROOT).resolve() / user_id
         ws_dir.mkdir(parents=True, exist_ok=True)
         cwd_path = (ws_dir / cwd).resolve() if cwd else ws_dir
         try:
@@ -69,9 +69,7 @@ class LocalSubprocessBackend:
         else:
             cmd = ["bash", "-c", code]
 
-        system_path = os.environ.get(
-            "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-        )
+        system_path = os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
         env = {
             "HOME": str(cwd_path),
             "PATH": f"{sys.prefix}/bin:{system_path}",
@@ -81,9 +79,7 @@ class LocalSubprocessBackend:
         }
 
         sandbox_label = "subprocess"
-        logger.debug(
-            f"sandbox.local user={user_id} lang={language} cwd={cwd_path}"
-        )
+        logger.debug(f"sandbox.local user={user_id} lang={language} cwd={cwd_path}")
 
         t0 = time.time()
         try:
@@ -99,7 +95,11 @@ class LocalSubprocessBackend:
         except subprocess.TimeoutExpired as err:
             return SandboxResult(
                 return_code=-1,
-                stdout=(err.stdout.decode("utf-8", "replace") if isinstance(err.stdout, bytes) else (err.stdout or "")),
+                stdout=(
+                    err.stdout.decode("utf-8", "replace")
+                    if isinstance(err.stdout, bytes)
+                    else (err.stdout or "")
+                ),
                 stderr=f"执行超时（>{timeout_s}s）",
                 duration_ms=int((time.time() - t0) * 1000),
                 sandbox_label=sandbox_label,

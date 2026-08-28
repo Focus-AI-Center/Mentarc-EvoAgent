@@ -36,8 +36,10 @@ class SandboxStdioMCPConsumer:
                 session_id=self.session_id,
                 server=self.server,
             )
-            return await asyncio.wait_for(session.call_tool(tool, args or {}, timeout), timeout=timeout + _CALL_TIMEOUT_SLACK)
-        except asyncio.TimeoutError:
+            return await asyncio.wait_for(
+                session.call_tool(tool, args or {}, timeout), timeout=timeout + _CALL_TIMEOUT_SLACK
+            )
+        except TimeoutError:
             return {"error": f"MCP tool {self.server.name}/{tool} timed out", "error_type": "timeout"}
         except Exception as exc:
             return {"error": f"{type(exc).__name__}: {exc}", "error_type": "sandbox_error"}

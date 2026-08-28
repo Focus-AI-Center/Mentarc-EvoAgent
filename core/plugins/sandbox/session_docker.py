@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
-import socket
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -51,8 +50,8 @@ def _drain_multiplexed(buffer: bytearray) -> tuple[list[tuple[int, bytes]], byte
             if len(buffer) < 8 + size:
                 break
             stream = buffer[0]
-            payload = bytes(buffer[8:8 + size])
-            del buffer[:8 + size]
+            payload = bytes(buffer[8 : 8 + size])
+            del buffer[: 8 + size]
             payloads.append((stream, payload))
             continue
         payloads.append((1, bytes(buffer)))
@@ -205,12 +204,19 @@ class DockerSandboxSession:
                     tty=False,
                 )
             output = await asyncio.wait_for(
-                asyncio.to_thread(self._client.api.exec_start, exec_id["Id"], detach=False, tty=False, stream=False, demux=True),
+                asyncio.to_thread(
+                    self._client.api.exec_start,
+                    exec_id["Id"],
+                    detach=False,
+                    tty=False,
+                    stream=False,
+                    demux=True,
+                ),
                 timeout=timeout_s + 30,
             )
             info = await asyncio.to_thread(self._client.api.exec_inspect, exec_id["Id"])
             return_code = int(info.get("ExitCode", -1))
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return SandboxResult(
                 return_code=124,
                 stdout="",
@@ -220,7 +226,9 @@ class DockerSandboxSession:
                 timed_out=True,
             )
         except Exception as err:
-            logger.error(f"sandbox.session exec_code failed {_session_fields(self.user_id, self.session_id)}: {err}")
+            logger.error(
+                f"sandbox.session exec_code failed {_session_fields(self.user_id, self.session_id)}: {err}"
+            )
             return SandboxResult(
                 return_code=-1,
                 stdout="",
@@ -248,7 +256,9 @@ class DockerSandboxSession:
     def label(self) -> str:
         return f"docker-session({self.image},net={self.network},container={self.container_id})"
 
-    async def exec_stdio_socket(self, *, server_name: str, command: str, args: tuple[str, ...], env: dict[str, str]):
+    async def exec_stdio_socket(
+        self, *, server_name: str, command: str, args: tuple[str, ...], env: dict[str, str]
+    ):
         self.last_used = time.monotonic()
         await self.ensure_running()
         env_parts = [f"{k}={shlex.quote(v)}" for k, v in env.items()]
@@ -293,11 +303,15 @@ class DockerSandboxSession:
         self._closed = True
         if self.container is not None:
             cid = self.container_id
-            logger.info(f"sandbox.session closing {_session_fields(self.user_id, self.session_id)} container={cid}")
+            logger.info(
+                f"sandbox.session closing {_session_fields(self.user_id, self.session_id)} container={cid}"
+            )
             try:
                 await asyncio.to_thread(self.container.remove, force=True, v=True)
             except Exception as exc:
-                logger.warning(f"sandbox.session cleanup failed {_session_fields(self.user_id, self.session_id)}: {exc}")
+                logger.warning(
+                    f"sandbox.session cleanup failed {_session_fields(self.user_id, self.session_id)}: {exc}"
+                )
             self.container = None
 
 
@@ -457,8 +471,7 @@ class SessionDockerBackend:
             user_id = labels.get("evoagent.user_id", "?")
             session_id = labels.get("evoagent.session_id", "?")
             logger.info(
-                "sandbox.session cleanup orphaned "
-                f"user={user_id} session={session_id} container={cid}"
+                f"sandbox.session cleanup orphaned user={user_id} session={session_id} container={cid}"
             )
             try:
                 await asyncio.to_thread(container.remove, force=True, v=True)

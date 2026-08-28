@@ -43,9 +43,7 @@ class ETagMismatchError(StorageError):
     """
 
     def __init__(self, key: str, expected: str | None, current: str | None):
-        super().__init__(
-            f"ETag mismatch on {key!r}: expected {expected!r}, current {current!r}"
-        )
+        super().__init__(f"ETag mismatch on {key!r}: expected {expected!r}, current {current!r}")
         self.key = key
         self.expected = expected
         self.current = current
@@ -67,9 +65,7 @@ class StorageBackend(Protocol):
     async def read_text(self, key: str) -> str:
         """Return UTF-8 text. Raises ``KeyNotFoundError`` if missing."""
 
-    async def write_text(
-        self, key: str, content: str, *, if_match: str | None = None
-    ) -> str:
+    async def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str:
         """Write UTF-8 text, return new ETag.
 
         ``if_match=None`` → no precondition.
@@ -81,9 +77,7 @@ class StorageBackend(Protocol):
     async def read_bytes(self, key: str) -> bytes:
         """Return raw bytes. Raises ``KeyNotFoundError`` if missing."""
 
-    async def write_bytes(
-        self, key: str, data: bytes, *, if_match: str | None = None
-    ) -> str:
+    async def write_bytes(self, key: str, data: bytes, *, if_match: str | None = None) -> str:
         """Write raw bytes, return new ETag. Same precondition semantics as write_text."""
 
     async def list_keys(self, prefix: str) -> list[str]:

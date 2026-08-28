@@ -45,16 +45,24 @@ def _make_invoker(consumer: MCPConsumer, tool: str, timeout: float):
         try:
             args = json.loads(args_json) if isinstance(args_json, str) and args_json else {}
         except json.JSONDecodeError as exc:
-            return json.dumps({"error": f"invalid args JSON: {exc}", "error_type": "bad_args"}, ensure_ascii=False)
+            return json.dumps(
+                {"error": f"invalid args JSON: {exc}", "error_type": "bad_args"}, ensure_ascii=False
+            )
         result = await consumer.call_tool(tool, args, timeout=timeout)
         if not isinstance(result, dict):
-            return json.dumps({"error": f"bad MCP response: {type(result).__name__}", "error_type": "bad_response"}, ensure_ascii=False)
+            return json.dumps(
+                {"error": f"bad MCP response: {type(result).__name__}", "error_type": "bad_response"},
+                ensure_ascii=False,
+            )
         if "error" in result:
             return json.dumps(result, ensure_ascii=False)
         text = _serialize_content(result.get("content") or [])
         if result.get("is_error"):
-            return json.dumps({"error": text or "MCP tool reported error", "error_type": "tool_error"}, ensure_ascii=False)
+            return json.dumps(
+                {"error": text or "MCP tool reported error", "error_type": "tool_error"}, ensure_ascii=False
+            )
         return text or "(empty result)"
+
     return _invoke
 
 
@@ -85,7 +93,11 @@ def mcp_tools_to_function_tools(
         agent_tool_name = f"{prefix}__{server.name}__{name}"
         description = (entry.get("description") or "").strip()
         origin = "sandbox stdio MCP" if server.source_kind == "sandbox" else "MCP server"
-        description = f"{description}\n\n[via {origin}: {server.name}]" if description else f"[via {origin}: {server.name}]"
+        description = (
+            f"{description}\n\n[via {origin}: {server.name}]"
+            if description
+            else f"[via {origin}: {server.name}]"
+        )
         schema = entry.get("inputSchema") or entry.get("input_schema") or {"type": "object"}
         if not isinstance(schema, dict):
             schema = {"type": "object"}

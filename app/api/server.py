@@ -25,6 +25,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # also fail fast on cross-mode configurations (LocalFS storage + remote
 # sandbox, or MinIO storage + local sandbox) — see plan §1.0.
 
+
 def _validate_runtime_config() -> None:
     storage = get_backend()  # eager: creates the singleton, surfaces missing creds
     storage_label = type(storage).__name__
@@ -44,16 +45,11 @@ def _validate_runtime_config() -> None:
         extras.append(f"bucket={bucket}")
         extras.append(f"endpoint={minio_endpoint}")
         extras.append(f"docker={os.getenv('DOCKER_HOST', '<local>')}")
-        extras.append(
-            f"image={os.getenv('SANDBOX_IMAGE', 'evoagent-sandbox:python3.11')}"
-        )
+        extras.append(f"image={os.getenv('SANDBOX_IMAGE', 'evoagent-sandbox:python3.11')}")
     else:
         extras.append(f"workspace={os.getenv('WORKSPACE_ROOT', 'data/workspace')}")
 
-    logger.info(
-        f"runtime: mode={mode} storage={storage_label} sandbox={sandbox_label} "
-        + " ".join(extras)
-    )
+    logger.info(f"runtime: mode={mode} storage={storage_label} sandbox={sandbox_label} " + " ".join(extras))
 
 
 _validate_runtime_config()

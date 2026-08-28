@@ -62,9 +62,7 @@ class LocalFSBackend:
         except FileNotFoundError as err:
             raise KeyNotFoundError(key) from err
 
-    def _write_bytes_sync(
-        self, key: str, data: bytes, if_match: str | None
-    ) -> str:
+    def _write_bytes_sync(self, key: str, data: bytes, if_match: str | None) -> str:
         p = self._resolve(key)
         if if_match is not None:
             try:
@@ -149,14 +147,10 @@ class LocalFSBackend:
     def read_text_sync(self, key: str) -> str:
         return self._read_bytes_sync(key).decode("utf-8")
 
-    def write_bytes_sync(
-        self, key: str, data: bytes, *, if_match: str | None = None
-    ) -> str:
+    def write_bytes_sync(self, key: str, data: bytes, *, if_match: str | None = None) -> str:
         return self._write_bytes_sync(key, data, if_match)
 
-    def write_text_sync(
-        self, key: str, content: str, *, if_match: str | None = None
-    ) -> str:
+    def write_text_sync(self, key: str, content: str, *, if_match: str | None = None) -> str:
         return self._write_bytes_sync(key, content.encode("utf-8"), if_match)
 
     def list_keys_sync(self, prefix: str) -> list[str]:
@@ -177,14 +171,10 @@ class LocalFSBackend:
         data = await self.read_bytes(key)
         return data.decode("utf-8")
 
-    async def write_bytes(
-        self, key: str, data: bytes, *, if_match: str | None = None
-    ) -> str:
+    async def write_bytes(self, key: str, data: bytes, *, if_match: str | None = None) -> str:
         return await asyncio.to_thread(self._write_bytes_sync, key, data, if_match)
 
-    async def write_text(
-        self, key: str, content: str, *, if_match: str | None = None
-    ) -> str:
+    async def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str:
         return await self.write_bytes(key, content.encode("utf-8"), if_match=if_match)
 
     async def list_keys(self, prefix: str) -> list[str]:

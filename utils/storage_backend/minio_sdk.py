@@ -93,9 +93,7 @@ class MinIOSDKBackend:
             raise
         return _strip_etag(stat.etag)
 
-    def _write_bytes_sync(
-        self, key: str, data: bytes, if_match: str | None
-    ) -> str:
+    def _write_bytes_sync(self, key: str, data: bytes, if_match: str | None) -> str:
         if if_match is not None:
             cur = self._stat_etag(key)
             if if_match == IF_MATCH_ABSENT:
@@ -114,9 +112,7 @@ class MinIOSDKBackend:
         return _strip_etag(result.etag) or ""
 
     def _list_keys_sync(self, prefix: str) -> list[str]:
-        objects = self._client.list_objects(
-            self.bucket, prefix=prefix, recursive=True
-        )
+        objects = self._client.list_objects(self.bucket, prefix=prefix, recursive=True)
         out: list[str] = []
         for obj in objects:
             name = obj.object_name
@@ -143,11 +139,7 @@ class MinIOSDKBackend:
                 raise
 
         # Fall through: treat as prefix (recursive delete).
-        objs = list(
-            self._client.list_objects(
-                self.bucket, prefix=key_or_prefix, recursive=True
-            )
-        )
+        objs = list(self._client.list_objects(self.bucket, prefix=key_or_prefix, recursive=True))
         if not objs:
             return 0
         delete_iter = (DeleteObject(o.object_name) for o in objs)
@@ -172,14 +164,10 @@ class MinIOSDKBackend:
     def read_text_sync(self, key: str) -> str:
         return self._read_bytes_sync(key).decode("utf-8")
 
-    def write_bytes_sync(
-        self, key: str, data: bytes, *, if_match: str | None = None
-    ) -> str:
+    def write_bytes_sync(self, key: str, data: bytes, *, if_match: str | None = None) -> str:
         return self._write_bytes_sync(key, data, if_match)
 
-    def write_text_sync(
-        self, key: str, content: str, *, if_match: str | None = None
-    ) -> str:
+    def write_text_sync(self, key: str, content: str, *, if_match: str | None = None) -> str:
         return self._write_bytes_sync(key, content.encode("utf-8"), if_match)
 
     def list_keys_sync(self, prefix: str) -> list[str]:
@@ -200,14 +188,10 @@ class MinIOSDKBackend:
         data = await self.read_bytes(key)
         return data.decode("utf-8")
 
-    async def write_bytes(
-        self, key: str, data: bytes, *, if_match: str | None = None
-    ) -> str:
+    async def write_bytes(self, key: str, data: bytes, *, if_match: str | None = None) -> str:
         return await asyncio.to_thread(self._write_bytes_sync, key, data, if_match)
 
-    async def write_text(
-        self, key: str, content: str, *, if_match: str | None = None
-    ) -> str:
+    async def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str:
         return await self.write_bytes(key, content.encode("utf-8"), if_match=if_match)
 
     async def list_keys(self, prefix: str) -> list[str]:

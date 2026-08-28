@@ -71,7 +71,7 @@ class MCPToolFilter:
     exclude: tuple[str, ...] = ()
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "MCPToolFilter":
+    def from_raw(cls, raw: Any) -> MCPToolFilter:
         if not isinstance(raw, dict):
             return cls()
         include = tuple(str(x) for x in raw.get("include") or [] if isinstance(x, str))
@@ -164,7 +164,11 @@ def _parse_server(name: str, raw: Any, *, minio_mode: bool) -> MCPServerConfig |
         if not url:
             logger.warning(f"[mcp-registry] skipping {name}: missing url")
             return None
-        headers = {str(k): str(v) for k, v in (raw.get("headers") or {}).items()} if isinstance(raw.get("headers"), dict) else {}
+        headers = (
+            {str(k): str(v) for k, v in (raw.get("headers") or {}).items()}
+            if isinstance(raw.get("headers"), dict)
+            else {}
+        )
         return MCPServerConfig(
             name=name,
             transport=transport,

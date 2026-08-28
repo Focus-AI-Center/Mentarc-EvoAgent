@@ -11,10 +11,8 @@ import asyncio
 import json
 import os
 import shlex
-import socket
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from core.mcp.registry import MCPServerConfig, is_minio_mode
 from core.plugins.sandbox.session_docker import get_session_docker_backend
@@ -108,7 +106,9 @@ class SandboxStdioSession:
             args=self.server.args,
             env=self.server.env,
         )
-        self._reader_task = asyncio.create_task(self._read_loop(), name=f"mcp-stdio:{self.user_id}:{self.session_id}:{self.server.name}")
+        self._reader_task = asyncio.create_task(
+            self._read_loop(), name=f"mcp-stdio:{self.user_id}:{self.session_id}:{self.server.name}"
+        )
         await self._initialize()
         logger.info(
             "[mcp-sandbox] stdio MCP initialized "
@@ -132,7 +132,7 @@ class SandboxStdioSession:
         while not self._closed:
             try:
                 chunk = await asyncio.to_thread(self._sock.recv, 4096)
-            except (socket.timeout, TimeoutError):
+            except TimeoutError:
                 continue
             except Exception as exc:
                 if not self._closed:
@@ -162,12 +162,14 @@ class SandboxStdioSession:
                 if len(self._buffer) < 8 + size:
                     break
                 stream = self._buffer[0]
-                payload = bytes(self._buffer[8:8 + size])
-                del self._buffer[:8 + size]
+                payload = bytes(self._buffer[8 : 8 + size])
+                del self._buffer[: 8 + size]
                 if stream == 1:
                     payloads.append(payload)
                 elif payload:
-                    logger.debug(f"[mcp-sandbox] stderr server={self.server.name}: {payload[:200].decode('utf-8', 'replace')}")
+                    logger.debug(
+                        f"[mcp-sandbox] stderr server={self.server.name}: {payload[:200].decode('utf-8', 'replace')}"
+                    )
                 continue
             if b"\n" not in self._buffer:
                 break
@@ -215,8 +217,7 @@ class SandboxStdioSession:
     async def list_tools(self) -> list[dict]:
         self.last_used = time.monotonic()
         logger.info(
-            "[mcp-sandbox] list_tools "
-            f"{_log_session_fields(self.user_id, self.session_id, self.server.name)}"
+            f"[mcp-sandbox] list_tools {_log_session_fields(self.user_id, self.session_id, self.server.name)}"
         )
         result = await self._request("tools/list", {}, timeout=10)
         tools = [_tool_to_jsonable(t) for t in result.get("tools", []) if isinstance(t, dict)]
@@ -238,7 +239,12 @@ class SandboxStdioSession:
         content = _content_to_jsonable(result.get("content") or [])
         text_len = sum(len(str(x)) for x in content)
         if text_len > _MAX_OUTPUT_CHARS:
-            content = [{"type": "text", "text": json.dumps(content, ensure_ascii=False)[:_MAX_OUTPUT_CHARS] + "\n[truncated]"}]
+            content = [
+                {
+                    "type": "text",
+                    "text": json.dumps(content, ensure_ascii=False)[:_MAX_OUTPUT_CHARS] + "\n[truncated]",
+                }
+            ]
         return {"content": content, "is_error": bool(result.get("isError") or result.get("is_error"))}
 
     async def close(self) -> None:
@@ -282,7 +288,9 @@ def _ensure_reaper() -> None:
         _reaper_task = asyncio.create_task(_reaper_loop(), name="mcp-stdio-reaper")
 
 
-async def get_sandbox_stdio_session(*, user_id: str, session_id: str, server: MCPServerConfig) -> SandboxStdioSession:
+async def get_sandbox_stdio_session(
+    *, user_id: str, session_id: str, server: MCPServerConfig
+) -> SandboxStdioSession:
     _ensure_reaper()
     key = _SessionKey(user_id=user_id, session_id=session_id, server_name=server.name)
     async with _sessions_lock:
@@ -290,8 +298,7 @@ async def get_sandbox_stdio_session(*, user_id: str, session_id: str, server: MC
         if sess is not None:
             sess.last_used = time.monotonic()
             logger.info(
-                "[mcp-sandbox] reusing stdio sandbox "
-                f"{_log_session_fields(user_id, session_id, server.name)}"
+                f"[mcp-sandbox] reusing stdio sandbox {_log_session_fields(user_id, session_id, server.name)}"
             )
             return sess
         sess = SandboxStdioSession(user_id=user_id, session_id=session_id, server=server)

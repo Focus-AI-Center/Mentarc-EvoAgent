@@ -134,9 +134,7 @@ class ExecuteCodeTool(BaseTool):
     async def __call__(self, params: ExecuteCodeParams) -> str:
         code = (params.code or "").strip()
         if not code:
-            return json.dumps(
-                {"success": False, "error": "code 不能为空"}, ensure_ascii=False
-            )
+            return json.dumps({"success": False, "error": "code 不能为空"}, ensure_ascii=False)
 
         lang = (params.language or "bash").lower()
         if lang in ("sh", "shell"):
@@ -154,9 +152,7 @@ class ExecuteCodeTool(BaseTool):
 
         for pat in _DANGEROUS_PATTERNS:
             if re.search(pat, code, re.IGNORECASE):
-                logger.warning(
-                    f"execute_code refused user={self._user_id} pattern={pat!r}"
-                )
+                logger.warning(f"execute_code refused user={self._user_id} pattern={pat!r}")
                 return json.dumps(
                     {
                         "success": False,
@@ -167,9 +163,7 @@ class ExecuteCodeTool(BaseTool):
 
         rel_cwd, cwd_err = _validate_cwd(params.cwd)
         if cwd_err:
-            return json.dumps(
-                {"success": False, "error": cwd_err}, ensure_ascii=False
-            )
+            return json.dumps({"success": False, "error": cwd_err}, ensure_ascii=False)
 
         try:
             backend = _get_backend()
@@ -198,9 +192,7 @@ class ExecuteCodeTool(BaseTool):
             )
         except Exception as err:
             logger.error(f"execute_code failed user={self._user_id}: {err}")
-            return json.dumps(
-                {"success": False, "error": str(err)}, ensure_ascii=False
-            )
+            return json.dumps({"success": False, "error": str(err)}, ensure_ascii=False)
 
         stdout = result.stdout or ""
         stderr = result.stderr or ""
