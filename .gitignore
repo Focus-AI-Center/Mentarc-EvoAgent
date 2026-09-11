@@ -213,3 +213,12 @@ logs/
 results/
 evaluation/data/
 *.log
+
+# Deployment secrets and local tool state
+.env.*
+!.env.example
+*.pem
+*.key
+.deepeval/
+.claude/
+.codex/

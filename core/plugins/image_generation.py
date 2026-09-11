@@ -69,7 +69,7 @@ class ImageGenerationTool(BaseTool):
         if not self.user_id:
             return "Error: user_id required."
 
-        url = f"{DOUBAO_API_BASE}/images/generations"
+        url = os.getenv("DOUBAO_GENERATIONS_URL") or f"{DOUBAO_API_BASE}/images/generations"
         size = _aspect_ratio_to_size(params.aspect_ratio)
         body = {
             "model": DOUBAO_MODEL,

@@ -172,7 +172,7 @@ class ImageReplicationTool(BaseTool):
             b64, mime = await _load_image(params.user_product_image, self.user_id, self._workspace)
             data_uri = f"data:{mime};base64,{b64}"
 
-            url = f"{DOUBAO_API_BASE}/images/edits"
+            url = os.getenv("DOUBAO_EDITS_URL") or f"{DOUBAO_API_BASE}/images/edits"
             size = _RATIO_TO_SIZE.get(params.aspect_ratio, "2048x2048")
             body = {
                 "model": DOUBAO_MODEL,

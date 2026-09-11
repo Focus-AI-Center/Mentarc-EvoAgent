@@ -28,3 +28,12 @@ Thumbs.db
 
 # Large assets not needed at runtime
 paper
+
+# Deployment secrets and local tool state
+.env.*
+!.env.example
+*.pem
+*.key
+.deepeval/
+.claude/
+.codex/

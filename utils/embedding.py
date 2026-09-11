@@ -9,7 +9,7 @@ from configs.settings import OPENAI_API_BASE, OPENAI_API_BASE_SECONDARY, OPENAI_
 from utils.logger import logger
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE", OPENAI_API_BASE_SECONDARY or OPENAI_API_BASE)
+EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE") or OPENAI_API_BASE_SECONDARY or OPENAI_API_BASE
 
 _client: OpenAI | None = None
 

@@ -70,7 +70,7 @@ class ImageEditingTool(BaseTool):
                 return f"Failed to load image {src}: {e}"
 
         # Call Doubao edit API
-        url = f"{DOUBAO_API_BASE}/images/edits"
+        url = os.getenv("DOUBAO_EDITS_URL") or f"{DOUBAO_API_BASE}/images/edits"
         size = _RATIO_TO_SIZE.get(params.aspect_ratio, "2048x2048")
         body = {
             "model": DOUBAO_MODEL,

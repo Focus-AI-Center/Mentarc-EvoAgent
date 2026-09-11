@@ -91,7 +91,7 @@ python -m app.api.server             # launches FastAPI server on :8194
 python cli.py --user demo            # interactive CLI
 ```
 
-The default `.env.example` has `MINIO_ENDPOINT` empty, which gives you the
+The default `.env.example` leaves `MINIO_ENDPOINT` unset, which gives you the
 **LOCAL** mode (workspaces in `data/workspace/`, `execute_code` via plain
 subprocess). For multi-user / persistent / hardened deployments, switch to
 **MINIO** mode — see the next section.
@@ -194,12 +194,14 @@ but no `MINIO_ENDPOINT`).
 ### Verify end-to-end
 
 ```bash
+# Set the single public application origin first.
+: "${SERVER_BASE_URL:?Set the public application URL}"
 # 1. /health
-curl -s http://localhost:8194/health
+curl -s "${SERVER_BASE_URL%/}/health"
 # {"status":"ok"}
 
 # 2. Trigger an execute_code call and confirm the sandbox label is the docker one
-curl -N -H 'Content-Type: application/json' http://localhost:8194/api/agent/chat \
+curl -N -H 'Content-Type: application/json' "${SERVER_BASE_URL%/}/api/agent/chat" \
   -d '{"userId":"smoke","sessionId":"s1","plugins":["execute_code"],
        "data":{"input":"用 execute_code 运行 print(2+3)"}}' \
   | grep -o '"sandbox": "[^"]*"' | head -1
@@ -317,3 +319,27 @@ See [CITATION.cff](CITATION.cff) for the machine-readable citation record.
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
+
+## Public distribution
+
+This release retains formal author names, copyright notices and official
+repository links. Corporate author email addresses and deployment-specific
+service details are omitted. This is an attributed release, not an anonymous one.
+
+Configure one public application origin through `SERVER_BASE_URL`; serve the UI
+and its `/api` routes from that same origin. The frontend uses same-origin URLs.
+Set `ALLOWED_ORIGINS` for that origin when deploying. Local listener addresses
+are development settings, not advertised service entrances.
+
+Provider URLs are separate outbound configuration: `OPENAI_API_BASE`,
+`OPENAI_API_BASE_SECONDARY`, `OPENAI_API_BASE_VISION`, `EMBEDDING_API_BASE`,
+`DOUBAO_API_BASE` and `APIFY_API_BASE` include their API base paths.
+`DOUBAO_GENERATIONS_URL` and `DOUBAO_EDITS_URL` accept complete gateway routes.
+Set storage endpoints and scraper actor IDs through the environment.
+Do not add deployment hostnames or credentials to the example file.
+
+Before sharing source, run `python3 scripts/release_check.py --output /tmp/evoagent-source.tar.gz`.
+It checks current tracked source plus non-ignored new files and packages only
+that checked snapshot, excluding Git history and local state. Upload this archive,
+not the working directory. The check detects known disclosure patterns and common
+credential formats; review additional deployment-specific secrets before upload.

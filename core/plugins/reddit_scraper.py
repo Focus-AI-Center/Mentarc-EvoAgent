@@ -18,7 +18,7 @@ from utils.logger import logger
 
 # --- Settings ---
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN", "")
-ACTOR_ID = "trudax~reddit-scraper-lite"
+ACTOR_ID = os.getenv("APIFY_ACTOR_ID") or "trudax~reddit-scraper-lite"
 
 
 class RedditScraperParams(BaseModel):
@@ -88,7 +88,7 @@ class RedditScraperTool(BaseTool):
             "proxy": {"useApifyProxy": True},
         }
 
-        base_url = "https://api.apify.com/v2"
+        base_url = (os.getenv("APIFY_API_BASE") or "https://api.apify.com/v2").rstrip("/")
         headers = {"Authorization": f"Bearer {APIFY_API_TOKEN}"}
 
         for attempt in range(3):
