@@ -51,9 +51,45 @@ def findings(name: str, data: bytes) -> list[str]:
     return errors
 
 
+def history_findings(root: Path) -> tuple[int, list[str]]:
+    """Check all reachable snapshots and commit metadata, without printing values."""
+
+    def git(*args: str) -> bytes:
+        return subprocess.check_output(["git", *args], cwd=root)
+
+    commits = git("rev-list", "--all").decode().splitlines()
+    errors = []
+    checked = set()
+    tool_credit = re.compile(
+        r"clau" + r"de|anthro" + r"pic|co-authored-by:.*(?:codex|copilot|chatgpt|gemini)", re.I
+    )
+    for commit in commits:
+        metadata = git("cat-file", "commit", commit)
+        errors.extend(findings(f"commit/{commit[:12]}", metadata))
+        if tool_credit.search(metadata.decode(errors="replace")):
+            errors.append(f"commit/{commit[:12]}: tool attribution")
+        for entry in git("ls-tree", "-r", "-z", commit).split(b"\0"):
+            if not entry:
+                continue
+            header, raw_name = entry.split(b"\t", 1)
+            _, kind, oid = header.split()
+            name = raw_name.decode()
+            if kind != b"blob":
+                errors.append(f"{commit[:12]}/{name}: unsupported history entry")
+                continue
+            if (name, oid) in checked:
+                continue
+            checked.add((name, oid))
+            errors.extend(
+                f"{commit[:12]}: {error}" for error in findings(name, git("cat-file", "blob", oid.decode()))
+            )
+    return len(commits), errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, help="Write checked source as tar.gz (outside repository)")
+    parser.add_argument("--history", action="store_true", help="Also check all reachable Git history")
     args = parser.parse_args()
     if args.output and args.output.resolve().is_relative_to(ROOT):
         parser.error("Place the archive outside the repository")
@@ -79,6 +115,10 @@ def main() -> int:
         data = path.read_bytes()
         snapshot[name] = (data, path.stat().st_mode & 0o777)
         errors.extend(findings(name, data))
+    if args.history:
+        count, history_errors = history_findings(ROOT)
+        errors.extend(history_errors)
+        print(f"Checked {count} reachable commits and their source snapshots.")
     if errors:
         print("Release check failed (values redacted):\n" + "\n".join(errors))
         return 1

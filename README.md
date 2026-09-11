@@ -338,8 +338,8 @@ Provider URLs are separate outbound configuration: `OPENAI_API_BASE`,
 Set storage endpoints and scraper actor IDs through the environment.
 Do not add deployment hostnames or credentials to the example file.
 
-Before sharing source, run `python3 scripts/release_check.py --output /tmp/evoagent-source.tar.gz`.
-It checks current tracked source plus non-ignored new files and packages only
+Before sharing source, run `python3 scripts/release_check.py --history --output /tmp/evoagent-source.tar.gz`.
+It checks all reachable Git history, current tracked source and non-ignored new files, then packages only
 that checked snapshot, excluding Git history and local state. Upload this archive,
 not the working directory. The check detects known disclosure patterns and common
 credential formats; review additional deployment-specific secrets before upload.
