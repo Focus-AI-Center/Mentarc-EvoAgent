@@ -94,14 +94,26 @@ class MinIOSDKBackend:
         return _strip_etag(stat.etag)
 
     def _write_bytes_sync(self, key: str, data: bytes, if_match: str | None) -> str:
+        from minio.error import S3Error
+
         if if_match is not None:
-            cur = self._stat_etag(key)
+            headers = {"Content-Type": "application/octet-stream"}
             if if_match == IF_MATCH_ABSENT:
-                if cur is not None:
-                    raise ETagMismatchError(key, IF_MATCH_ABSENT, cur)
+                headers["If-None-Match"] = "*"
             else:
-                if cur != if_match:
-                    raise ETagMismatchError(key, if_match, cur)
+                headers["If-Match"] = f'"{if_match}"'
+            try:
+                # minio-py's public put_object has no conditional-header argument.
+                # Keep this adapter here; the precondition must be checked by S3
+                # in the same request as the PUT, never via a stat/PUT sequence.
+                result = self._client._put_object(self.bucket, key, data, headers=headers)
+            except S3Error as err:
+                if err.code in ("PreconditionFailed", "ConditionalRequestConflict") or (
+                    if_match != IF_MATCH_ABSENT and self._is_no_such_key(err)
+                ):
+                    raise ETagMismatchError(key, if_match, None) from err
+                raise StorageError(f"MinIO conditional PUT failed for {key!r}: {err}") from err
+            return _strip_etag(result.etag) or ""
         result = self._client.put_object(
             self.bucket,
             key,
@@ -163,6 +175,25 @@ class MinIOSDKBackend:
 
     def read_text_sync(self, key: str) -> str:
         return self._read_bytes_sync(key).decode("utf-8")
+
+    def read_text_with_etag_sync(self, key: str) -> tuple[str, str]:
+        from minio.error import S3Error
+
+        try:
+            resp = self._client.get_object(self.bucket, key)
+        except S3Error as err:
+            if self._is_no_such_key(err):
+                raise KeyNotFoundError(key) from err
+            raise StorageError(f"MinIO get_object failed for {key!r}: {err}") from err
+        try:
+            data = resp.read()
+            etag = _strip_etag(resp.headers.get("ETag") or resp.headers.get("etag"))
+            if not etag:
+                raise StorageError(f"MinIO GET returned no ETag for {key!r}")
+            return data.decode("utf-8"), etag
+        finally:
+            resp.close()
+            resp.release_conn()
 
     def write_bytes_sync(self, key: str, data: bytes, *, if_match: str | None = None) -> str:
         return self._write_bytes_sync(key, data, if_match)

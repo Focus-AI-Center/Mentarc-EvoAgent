@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -370,7 +370,7 @@
     white-space: nowrap;
     min-width: 64px;
   }
-  .profile-field-name::after { content: '：'; }
+  .profile-field-name::after { content: ':'; }
   .profile-field-value {
     color: var(--fg);
     word-break: break-all;
@@ -1010,7 +1010,7 @@
   .memory-rendered ul { padding-left: 16px; margin: 4px 0; }
   .memory-rendered li { margin: 2px 0; }
 
-  /* Memory index cards (MEMORY.md 索引) */
+  /* Memory index cards (MEMORY.md index) */
   .memory-index { display: flex; flex-direction: column; gap: 8px; }
   .memory-card {
     padding: 8px 10px;
@@ -1709,7 +1709,7 @@
     line-height: 1.5;
     position: relative;
   }
-  /* 左侧 timeline 竖线 */
+  /* Left-side timeline timeline rule */
   .todo-item:not(:last-child)::after {
     content: '';
     position: absolute;
@@ -1734,7 +1734,7 @@
     z-index: 1;
   }
   .todo-content { flex: 1; min-width: 0; }
-  /* 右侧工具徽章 */
+  /* Right-side tool badges */
   .todo-tool-badge {
     display: inline-flex;
     align-items: center;
@@ -2133,14 +2133,14 @@
 <div class="auth-overlay" id="authOverlay">
   <div class="auth-card">
     <div class="auth-logo"><div class="auth-logo-icon">M</div></div>
-    <div class="auth-title" id="authTitle">登录</div>
-    <input class="auth-input" id="authUsername" placeholder="用户名" autocomplete="username">
-    <input class="auth-input" id="authPassword" type="password" placeholder="密码" autocomplete="current-password">
+    <div class="auth-title" id="authTitle">Log in</div>
+    <input class="auth-input" id="authUsername" placeholder="Username" autocomplete="username">
+    <input class="auth-input" id="authPassword" type="password" placeholder="Password" autocomplete="current-password">
     <div class="auth-error" id="authError"></div>
-    <button class="auth-btn" id="authBtn" onclick="authSubmit()">登录</button>
+    <button class="auth-btn" id="authBtn" onclick="authSubmit()">Log in</button>
     <div class="auth-switch">
-      <span id="authSwitchText">还没有账号？</span>
-      <a href="#" id="authSwitchLink" onclick="toggleAuthMode(event)">注册</a>
+      <span id="authSwitchText">No account yet?</span>
+      <a href="#" id="authSwitchLink" onclick="toggleAuthMode(event)">Sign up</a>
     </div>
   </div>
 </div>
@@ -2159,7 +2159,7 @@
   <input id="userId" type="hidden" value="">
   <input id="sessionId" type="hidden" value="">
   <span class="user-name" id="userName"></span>
-  <button class="logout-btn" onclick="logout()">退出</button>
+  <button class="logout-btn" onclick="logout()">Log out</button>
   <button class="ws-toggle" id="growthToggle" onclick="toggleGrowth()">Growth</button>
 </div>
 
@@ -2167,42 +2167,42 @@
   <div class="sidebar" id="sidebar">
     <div class="sidebar-section" id="sidebarProfile">
       <div class="sidebar-section-header" onclick="toggleSidebarSection('sidebarProfile')">
-        <span>用户画像</span>
+        <span>User profile</span>
         <span class="sidebar-chevron">&#x25B8;</span>
       </div>
       <div class="sidebar-section-body hidden" id="profileTable"></div>
     </div>
     <div class="sidebar-section" id="sidebarMemory">
       <div class="sidebar-section-header" onclick="toggleSidebarSection('sidebarMemory')">
-        <span>记忆</span>
+        <span>Memory</span>
         <span class="sidebar-chevron">&#x25B8;</span>
       </div>
       <div class="sidebar-section-body hidden" id="memoryContent"></div>
     </div>
     <div class="sidebar-section" id="sidebarSkills">
       <div class="sidebar-section-header" onclick="toggleSidebarSection('sidebarSkills')">
-        <span>已掌握技能 <span id="skillCount" style="font-size:0.72rem;color:var(--fg-muted);margin-left:4px">0</span></span>
+        <span>Available skills <span id="skillCount" style="font-size:0.72rem;color:var(--fg-muted);margin-left:4px">0</span></span>
         <span class="sidebar-chevron">&#x25B8;</span>
       </div>
       <div class="sidebar-section-body hidden" id="skillsContent"></div>
     </div>
     <div class="sidebar-section" id="sidebarSubAgents">
       <div class="sidebar-section-header" onclick="toggleSidebarSection('sidebarSubAgents')">
-        <span>子 agent <span id="subAgentCount" style="font-size:0.72rem;color:var(--fg-muted);margin-left:4px">0</span></span>
+        <span>Sub-agents <span id="subAgentCount" style="font-size:0.72rem;color:var(--fg-muted);margin-left:4px">0</span></span>
         <span class="sidebar-chevron">&#x25B8;</span>
       </div>
       <div class="sidebar-section-body hidden" id="subAgentsContent"></div>
     </div>
     <div class="sidebar-section" id="sidebarTasks">
       <div class="sidebar-section-header" onclick="toggleSidebarSection('sidebarTasks')">
-        <span>计划任务 <span id="taskCount" style="font-size:0.72rem;color:var(--fg-muted);margin-left:4px">0</span></span>
+        <span>Scheduled tasks <span id="taskCount" style="font-size:0.72rem;color:var(--fg-muted);margin-left:4px">0</span></span>
         <span class="sidebar-chevron">&#x25B8;</span>
       </div>
       <div class="sidebar-section-body hidden" id="tasksContent"></div>
     </div>
     <div class="sidebar-header">
-      <span>历史会话</span>
-      <button class="sidebar-new-btn" onclick="newSession()">+ 新对话</button>
+      <span>Session history</span>
+      <button class="sidebar-new-btn" onclick="newSession()">+ New conversation</button>
     </div>
     <div class="sidebar-list" id="sidebarList"></div>
   </div>
@@ -2217,37 +2217,37 @@
           <circle cx="10.5" cy="38.5" r="1.8" fill="currentColor" opacity="0.45"/>
         </svg>
       </div>
-      <div class="welcome-title" id="welcomeTitle">你好，我是 EvoAgent</div>
-      <div class="welcome-subtitle">你的通用智能助手。输入需求或选择快捷任务开始。</div>
+      <div class="welcome-title" id="welcomeTitle">Hello, I am EvoAgent</div>
+      <div class="welcome-subtitle">Your general-purpose assistant. Enter a request or choose a quick task.</div>
       <div class="welcome-cards">
-        <div class="welcome-card" onclick="useCard('帮我搜索一下最新的AI新闻')">
+        <div class="welcome-card" onclick="useCard('Search for the latestAInews')">
           <div class="welcome-card-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg>
           </div>
-          <div class="welcome-card-title">搜索信息</div>
-          <div class="welcome-card-desc">搜索网页获取实时资讯和数据</div>
+          <div class="welcome-card-title">Search information</div>
+          <div class="welcome-card-desc">Search the web for current information and data</div>
         </div>
-        <div class="welcome-card" onclick="useCard('创建一个技能')">
+        <div class="welcome-card" onclick="useCard('Create a skill')">
           <div class="welcome-card-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3"/></svg>
           </div>
-          <div class="welcome-card-title">创建技能</div>
-          <div class="welcome-card-desc">定义可复用的工作流，下次自动触发</div>
+          <div class="welcome-card-title">Create skill</div>
+          <div class="welcome-card-desc">Define a reusable workflow,Activate it automatically next time</div>
         </div>
-        <div class="welcome-card" onclick="useCard('帮我生成一张科技风格的产品图')">
+        <div class="welcome-card" onclick="useCard('Generate a technology-themed product image')">
           <div class="welcome-card-icon">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c1.66 0 3-1.34 3-3 0-.78-.3-1.48-.78-2.01-.47-.53-.75-1.22-.75-1.99 0-1.66 1.34-3 3-3h1.17c2.35 0 4.3-1.65 4.76-3.85.08-.35.1-.7.1-1.15C22 6.5 17.5 2 12 2Z"/></svg>
           </div>
-          <div class="welcome-card-title">生成图片</div>
-          <div class="welcome-card-desc">根据描述生成各类风格的图片</div>
+          <div class="welcome-card-title">Generate images</div>
+          <div class="welcome-card-desc">Generate images in different styles from a description</div>
         </div>
       </div>
       <div class="welcome-input-area">
         <div class="welcome-input-wrap">
-          <button class="upload-btn" onclick="document.getElementById('imageInput').click()" title="上传图片（支持多张）">
+          <button class="upload-btn" onclick="document.getElementById('imageInput').click()" title="Upload images(multiple supported)">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
           </button>
-          <textarea id="welcomeInput" rows="1" placeholder="有问题，尽管问" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();welcomeSend()}"></textarea>
+          <textarea id="welcomeInput" rows="1" placeholder="Ask anything" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();welcomeSend()}"></textarea>
           <button class="welcome-send-btn" onclick="welcomeSend()">&#x2191;</button>
         </div>
       </div>
@@ -2257,21 +2257,21 @@
     <div class="chat hidden" id="chat"></div>
     <div class="input-area hidden" id="chatInputArea">
       <div class="input-actions">
-        <button class="input-action-btn" id="updateBtn" onclick="updateSession()" title="更新画像和记忆">
-          <img src="/static/resources/记忆更新.svg" alt="更新" width="14" height="14">
-          <span>记忆更新</span>
+        <button class="input-action-btn" id="updateBtn" onclick="updateSession()" title="Update profile and memory">
+          <img src="/static/resources/update-memory.svg" alt="Update" width="14" height="14">
+          <span>Update memory</span>
         </button>
       </div>
       <div class="image-preview-bar" id="imagePreviewBar"></div>
       <div class="input-wrap">
         <input type="file" id="fileInput" accept=".md,.txt,.text,.markdown" style="display:none">
         <input type="file" id="imageInput" accept="image/png,image/jpeg,image/webp" multiple style="display:none">
-        <button class="upload-btn" onclick="document.getElementById('imageInput').click()" title="上传图片（支持多张）">
+        <button class="upload-btn" onclick="document.getElementById('imageInput').click()" title="Upload images(multiple supported)">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
         </button>
-        <button class="upload-btn" onclick="document.getElementById('fileInput').click()" title="上传 .md / .txt 文件"><img src="/static/resources/文件-文件上传.svg" alt="上传" width="20" height="20"></button>
-        <textarea id="input" rows="1" placeholder="输入消息..." autofocus></textarea>
-        <button id="sendBtn" onclick="send()">发送</button>
+        <button class="upload-btn" onclick="document.getElementById('fileInput').click()" title="Upload .md / .txt File"><img src="/static/resources/file-upload.svg" alt="Upload" width="20" height="20"></button>
+        <textarea id="input" rows="1" placeholder="Type a message..." autofocus></textarea>
+        <button id="sendBtn" onclick="send()">Send</button>
       </div>
       <div class="file-tag" id="fileTag">
         <span class="file-tag-name" id="fileTagName"></span>
@@ -2281,16 +2281,16 @@
 
     <div class="opportunity hidden" id="opportunity">
       <div class="opp-header">
-        <button class="opp-back-btn" onclick="closeOpportunity()">&larr; 返回</button>
+        <button class="opp-back-btn" onclick="closeOpportunity()">&larr; return</button>
         <div class="opp-title-group">
-          <h1 class="opp-title">每日商机</h1>
+          <h1 class="opp-title">Daily opportunities</h1>
           <span class="opp-date" id="oppDate"></span>
         </div>
-        <button class="opp-regen-btn" id="oppRegenBtn" onclick="generateOpportunity()">重新生成</button>
+        <button class="opp-regen-btn" id="oppRegenBtn" onclick="generateOpportunity()">Regenerate</button>
       </div>
       <div class="opp-content" id="oppContent">
         <div class="opp-content-inner">
-          <div class="opp-loading hidden" id="oppLoading">分析中</div>
+          <div class="opp-loading hidden" id="oppLoading">Analyzing</div>
           <div class="opp-article" id="oppArticle"></div>
         </div>
       </div>
@@ -2301,7 +2301,7 @@
     <div class="pp-header">
       <span class="pp-title" id="previewTitle">Preview</span>
       <div class="pp-actions">
-        <button class="pp-btn" onclick="openPreviewNewTab()">↗ 新窗口</button>
+        <button class="pp-btn" onclick="openPreviewNewTab()">↗ New window</button>
         <button class="pp-btn" onclick="closePreview()">✕</button>
       </div>
     </div>
@@ -2311,11 +2311,11 @@
   </div>
   <div class="growth-panel hidden" id="growthPanel">
     <div class="gp-header">
-      <span class="gp-title">技能进化</span>
+      <span class="gp-title">Skill evolution</span>
       <button class="gp-close" onclick="toggleGrowth()">✕</button>
     </div>
     <div class="gp-body" id="growthBody">
-      <div style="text-align:center;color:var(--fg-muted);padding:40px 0">加载中...</div>
+      <div style="text-align:center;color:var(--fg-muted);padding:40px 0">Loading...</div>
     </div>
   </div>
 </div>
@@ -2343,10 +2343,10 @@ let authMode = 'login';
 function toggleAuthMode(e) {
   e.preventDefault();
   authMode = authMode === 'login' ? 'register' : 'login';
-  document.getElementById('authTitle').textContent = authMode === 'login' ? '登录' : '注册';
-  document.getElementById('authBtn').textContent = authMode === 'login' ? '登录' : '注册';
-  document.getElementById('authSwitchText').textContent = authMode === 'login' ? '还没有账号？' : '已有账号？';
-  document.getElementById('authSwitchLink').textContent = authMode === 'login' ? '注册' : '登录';
+  document.getElementById('authTitle').textContent = authMode === 'login' ? 'Log in' : 'Sign up';
+  document.getElementById('authBtn').textContent = authMode === 'login' ? 'Log in' : 'Sign up';
+  document.getElementById('authSwitchText').textContent = authMode === 'login' ? 'No account yet?' : 'Already have an account?';
+  document.getElementById('authSwitchLink').textContent = authMode === 'login' ? 'Sign up' : 'Log in';
   document.getElementById('authError').textContent = '';
 }
 
@@ -2357,7 +2357,7 @@ async function authSubmit() {
   errorEl.textContent = '';
 
   if (!username || !password) {
-    errorEl.textContent = '请输入用户名和密码';
+    errorEl.textContent = 'Enter a username and password';
     return;
   }
 
@@ -2371,13 +2371,13 @@ async function authSubmit() {
     });
     const data = await res.json();
     if (!res.ok) {
-      errorEl.textContent = data.detail || '操作失败';
+      errorEl.textContent = data.detail || 'Operation failed';
       return;
     }
     localStorage.setItem('evoagent_user', data.username);
     enterApp(data.username);
   } catch (err) {
-    errorEl.textContent = '网络错误: ' + err.message;
+    errorEl.textContent = 'Network error: ' + err.message;
   } finally {
     btn.disabled = false;
   }
@@ -2398,7 +2398,7 @@ async function enterApp(username) {
   document.getElementById('userId').value = username;
   document.getElementById('userName').textContent = username;
   document.getElementById('authOverlay').classList.add('hidden');
-  document.getElementById('welcomeTitle').textContent = '你好，我是 EvoAgent';
+  document.getElementById('welcomeTitle').textContent = 'Hello, I am EvoAgent';
   if (!sessionEl.value) {
     sessionEl.value = Math.random().toString(36).slice(2, 10);
   }
@@ -2424,7 +2424,7 @@ async function logout() {
   chatEl.textContent = '';
   sessionEl.value = '';
   showWelcome();
-  document.getElementById('welcomeTitle').textContent = '你好，我是 EvoAgent';
+  document.getElementById('welcomeTitle').textContent = 'Hello, I am EvoAgent';
   document.getElementById('authUsername').value = '';
   document.getElementById('authPassword').value = '';
   document.getElementById('authError').textContent = '';
@@ -2489,7 +2489,7 @@ function toggleActionCheck(el) {
   if (!wrap) return;
   var btn = wrap.querySelector('.action-confirm-btn');
   var count = wrap.querySelectorAll('.action-check-card.selected').length;
-  if (btn) btn.textContent = '确认生成（已选 ' + count + ' 项）';
+  if (btn) btn.textContent = 'Confirm generation (selected ' + count + ' items)';
 }
 
 function confirmActionCards(groupId) {
@@ -2500,7 +2500,7 @@ function confirmActionCards(groupId) {
   var titles = Array.from(selected).map(function(el) {
     return el.querySelector('.action-item-title').textContent;
   });
-  inputEl.value = titles.join('、');
+  inputEl.value = titles.join(',');
   send();
 }
 
@@ -2566,7 +2566,7 @@ function createBotMsg() {
   div.className = 'msg bot';
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-  bubble.textContent = '思考中...';
+  bubble.textContent = 'Thinking...';
   div.appendChild(bubble);
   chatEl.appendChild(div);
   scrollToBottom();
@@ -2629,7 +2629,7 @@ function renderMarkdown(text) {
       var msg = esc(ac.message || '');
       return '<div class="action-cards-wrap"><div class="action-upload" onclick="document.getElementById(\'imageInput\').click()">' +
         '<div class="action-upload-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>' +
-        '<div class="action-upload-text">拖拽图片到此处 或 <span class="browse">点击上传</span></div>' +
+        '<div class="action-upload-text">Drop images here or <span class="browse">click to upload</span></div>' +
         (msg ? '<div class="action-upload-hint">' + msg + '</div>' : '') +
         '</div></div>';
     }
@@ -2647,7 +2647,7 @@ function renderMarkdown(text) {
       return '<div class="action-cards-wrap">' +
         (ac.message ? '<div class="action-select-title">' + esc(ac.message) + '</div>' : '') +
         '<div class="action-check-group" id="' + uid + '">' + items + '</div>' +
-        '<button class="action-confirm-btn" onclick="confirmActionCards(\'' + uid + '\')">确认生成（已选 0 项）</button></div>';
+        '<button class="action-confirm-btn" onclick="confirmActionCards(\'' + uid + '\')">Confirm generation (selected 0 items)</button></div>';
     }
 
     if (ac.type === 'radio_select') {
@@ -2689,23 +2689,26 @@ function renderMarkdown(text) {
 // tolerant fallback so historical session JSON with flatcase names
 // ("websearch") still renders the correct label/icon.
 const TOOL_LABELS = {
-  web_search: '网络搜索',
-  fetch_url: '网页抓取',
-  image_generation: '图片生成',
-  image_editing: '图片编辑',
-  image_understanding: '图片识别',
-  image_replication: '图片复刻',
-  update_user_profile: '更新画像',
-  update_memory: '更新记忆',
-  skill_manager: '技能管理',
-  html_render: '页面渲染',
-  reddit_scraper: 'Reddit 抓取',
-  todo_manager: '任务进度',
-  execute_code: '代码执行',
-  ask_user_question: '询问用户',
-  schedule_manager: '定时任务',
-  sub_agent: '子代理',
-  parent_history: '父 agent 历史',
+  toolsearch: 'Tool search',
+  web_search: 'Web search',
+  fetch_url: 'Fetch page',
+  image_generation: 'Image generation',
+  image_editing: 'Image editing',
+  image_understanding: 'Image understanding',
+  image_replication: 'Image replication',
+  update_user_profile: 'Update profile',
+  memory: 'Memory',
+  skill: 'Skill',
+  update_memory: 'Memory',
+  skill_manager: 'Skill',
+  html_render: 'Render page',
+  reddit_scraper: 'Reddit Fetch',
+  todo_manager: 'Task progress',
+  execute_code: 'Code execution',
+  ask_user_question: 'Ask user',
+  schedule_manager: 'Scheduled tasks',
+  sub_agent: 'Sub-agent',
+  parent_history: 'Parent agent history',
 };
 // Lucide-style line icons (stroke=currentColor, inherits warm foreground)
 const ICON_PATHS = {
@@ -2732,6 +2735,7 @@ function svgIcon(key) {
   return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' + d + '</svg>';
 }
 const TOOL_ICONS = {
+  toolsearch: svgIcon('search'),
   web_search: svgIcon('search'),
   fetch_url: svgIcon('link'),
   image_generation: svgIcon('palette'),
@@ -2739,6 +2743,8 @@ const TOOL_ICONS = {
   image_understanding: svgIcon('eye'),
   image_replication: svgIcon('image'),
   update_user_profile: svgIcon('user'),
+  memory: svgIcon('save'),
+  skill: svgIcon('clipboard'),
   update_memory: svgIcon('save'),
   skill_manager: svgIcon('clipboard'),
   html_render: svgIcon('image'),
@@ -2766,44 +2772,44 @@ function toolIcon(name) {
   return TOOL_ICONS[name] || _TOOL_ICON_FLAT[_normalizeTool(name)] || svgIcon('wrench');
 }
 
-// 技能名称中文映射
+// Skill display names
 const SKILL_LABELS = {
-  'ecommerce-product-replication': '产品复刻',
-  'skill-creator': '技能创建',
+  'ecommerce-product-replication': 'Product replication',
+  'skill-creator': 'Skill creation',
 };
 function skillLabel(name) { return SKILL_LABELS[name] || name; }
 
 function toolResultSummary(name, result) {
   if (!result) return '';
   var text = typeof result === 'string' ? result : JSON.stringify(result);
-  if (name === 'html_render') return 'HTML 页面已生成';
+  if (name === 'html_render') return 'HTML page generated';
   if (name === 'amazonscraper') {
     try {
       var arr = typeof result === 'string' ? JSON.parse(result) : result;
-      if (Array.isArray(arr)) return '抓取到 ' + arr.length + ' 个产品';
+      if (Array.isArray(arr)) return 'Fetched ' + arr.length + ' products';
     } catch {}
-    return '抓取完成';
+    return 'Fetch completed';
   }
   if (name === 'websearch') {
     var count = (text.match(/---/g) || []).length;
-    if (count > 0) return '找到 ' + count + ' 条结果';
-    if (text.length > 20) return '搜索完成';
+    if (count > 0) return 'Found ' + count + ' results';
+    if (text.length > 20) return 'Search completed';
   }
   if (name === 'fetchurl' || name === 'fetch_url') {
     try {
       var arr2 = typeof result === 'string' ? JSON.parse(result) : result;
-      if (Array.isArray(arr2) && arr2.length && arr2[0].product_title) return '抓取到 ' + arr2.length + ' 个产品';
+      if (Array.isArray(arr2) && arr2.length && arr2[0].product_title) return 'Fetched ' + arr2.length + ' products';
     } catch {}
-    if (text.length > 20) return '抓取完成';
+    if (text.length > 20) return 'Fetch completed';
   }
   if (name === 'update_user_profile') {
     try {
       var r = typeof result === 'string' ? JSON.parse(result) : result;
       if (r.fields) {
-        return '已' + (r.action || '更新') + ' ' + Object.keys(r.fields).join('、');
+        return (r.action || 'Updated') + ' fields: ' + Object.keys(r.fields).join(', ');
       }
     } catch {}
-    var m = text.match(/已(?:追加|更新)字段[：:]\s*(.+)/);
+    var m = text.match(/(?:Appended|Updated) fields:\s*(.+)/i);
     if (m) return m[0];
   }
   return '';
@@ -2814,24 +2820,27 @@ function toolInputSummary(name, args) {
   try { a = typeof args === 'string' ? JSON.parse(args) : args; } catch { return ''; }
   if (!a || typeof a !== 'object') return '';
   switch (name) {
+    case 'toolsearch': return a.query || '';
     case 'websearch': return (a.query || a.keyword || a.search_query || '');
     case 'fetch_url': return (a.url || '').slice(0, 80);
-    case 'update_user_profile': return '更新 ' + (a.field || a.param || Object.keys(a).join(', '));
-    case 'update_memory': return (a.action || '') + ' 记忆';
-    case 'skill_manager': {
+    case 'update_user_profile': return 'Update ' + (a.field || a.param || Object.keys(a).join(', '));
+    case 'update_memory':
+    case 'memory': return (a.action || '') + ' Memory';
+    case 'skill_manager':
+    case 'skill': {
       if (a.action === 'get_ref' && a.ref_filename) {
         var refName = a.ref_filename.replace(/^references\//, '').replace(/\.md$/, '');
-        return '读取' + (a.name ? '「' + skillLabel(a.name) + '」' : '') + '指南 · ' + refName;
+        return 'Read ' + (a.name ? skillLabel(a.name) + ' ' : '') + 'guide: ' + refName;
       }
-      const _sma = { get: '读取技能', list: '查看技能列表', save: '保存技能', 'delete': '删除技能', ref_set: '更新指南', ref_del: '删除指南' };
-      return (_sma[a.action] || a.action || '') + (a.name ? '「' + skillLabel(a.name) + '」' : '');
+      const _sma = { get: 'Read skill', list: 'List skills', save: 'Save skill', 'delete': 'Delete skill', ref_set: 'Update guide', ref_del: 'Delete guide' };
+      return (_sma[a.action] || a.action || '') + (a.name ? ' ' + skillLabel(a.name) : '');
     }
     case 'image_generation': return (a.prompt || '').slice(0, 60);
     case 'image_editing': return (a.prompt || '').slice(0, 60);
     case 'amazonscraper': return (a.asin_list || a.asin || '').slice(0, 60) + (a.country ? ' (' + a.country + ')' : '');
     case 'todo_manager':
-      if (a.action === 'add' && a.tasks) return '创建 ' + a.tasks.length + ' 个任务';
-      if (a.action === 'update') return '更新 #' + (a.id || '') + ' → ' + (a.status || 'completed');
+      if (a.action === 'add' && a.tasks) return 'Create ' + a.tasks.length + ' tasks';
+      if (a.action === 'update') return 'Update #' + (a.id || '') + ' → ' + (a.status || 'completed');
       return a.action || '';
     default: return Object.entries(a).map(([k,v]) => k + ': ' + (Array.isArray(v) ? '[' + v.length + ' items]' : String(v).slice(0, 40))).join(', ').slice(0, 80);
   }
@@ -2857,7 +2866,7 @@ function renderAmzProductCard(p, idx) {
   var gallery = '';
   if (p.product_photos && p.product_photos.length) {
     gallery = p.product_photos.map(function(url, i) {
-      return '<div class="amz-gal-item" onclick="openAmzLightbox(\''+amzEsc(url)+'\')" title="点击查看大图"><img src="'+amzEsc(url)+'" alt="图片'+(i+1)+'" loading="lazy"></div>';
+      return '<div class="amz-gal-item" onclick="openAmzLightbox(\''+amzEsc(url)+'\')" title="Click to enlarge"><img src="'+amzEsc(url)+'" alt="Image'+(i+1)+'" loading="lazy"></div>';
     }).join('');
   }
 
@@ -2867,7 +2876,7 @@ function renderAmzProductCard(p, idx) {
       return '<li><span class="bnum">'+(i+1)+'</span><span>'+amzEsc(item)+'</span></li>';
     }).join('') + '</ul>';
   } else {
-    bullets = '<p style="color:var(--fg-muted);font-size:12px">暂无产品信息</p>';
+    bullets = '<p style="color:var(--fg-muted);font-size:12px">No product information</p>';
   }
 
   var spec = '';
@@ -2876,10 +2885,10 @@ function renderAmzProductCard(p, idx) {
       return '<tr><td>'+amzEsc(kv[0])+'</td><td>'+amzEsc(kv[1])+'</td></tr>';
     }).join('') + '</table>';
   } else {
-    spec = '<p style="color:var(--fg-muted);font-size:12px">暂无规格数据</p>';
+    spec = '<p style="color:var(--fg-muted);font-size:12px">No specification data</p>';
   }
 
-  var desc = p.product_description ? '<p class="amz-desc-text">'+amzEsc(p.product_description)+'</p>' : '<p style="color:var(--fg-muted);font-size:12px">暂无产品描述</p>';
+  var desc = p.product_description ? '<p class="amz-desc-text">'+amzEsc(p.product_description)+'</p>' : '<p style="color:var(--fg-muted);font-size:12px">No product description</p>';
 
   var catPath = '';
   if (p.category_path && p.category_path.length) {
@@ -2892,16 +2901,16 @@ function renderAmzProductCard(p, idx) {
     + '<div class="amz-section">'
     + '<div class="amz-title"><a href="'+amzEsc(p.product_url)+'" target="_blank">'+amzEsc(p.product_title)+'</a></div>'
     + '<div class="amz-meta">'
-    + (brand ? '<span>品牌 <strong>'+amzEsc(brand)+'</strong></span>' : '')
+    + (brand ? '<span>Brand <strong>'+amzEsc(brand)+'</strong></span>' : '')
     + '<span>ASIN <strong>'+amzEsc(p.asin)+'</strong></span>'
-    + '<span>来源 <strong>Amazon US</strong></span>'
+    + '<span>Source <strong>Amazon US</strong></span>'
     + '</div>'
     + '<div class="amz-price">'+currency+amzEsc(p.product_price)+'</div>'
     + catPath
     + '</div>'
-    + (chips ? '<div class="amz-section"><div class="amz-sec-label">产品属性</div><div class="amz-attrs">'+chips+'</div></div>' : '')
-    + (gallery ? '<div class="amz-section"><div class="amz-sec-label">产品图片（'+p.product_photos.length+'张）</div><div class="amz-gallery">'+gallery+'</div></div>' : '')
-    + '<div class="amz-tab-nav" data-amztabs="'+cid+'"><button class="active">产品信息</button><button>规格参数</button><button>产品描述</button></div>'
+    + (chips ? '<div class="amz-section"><div class="amz-sec-label">Product attributes</div><div class="amz-attrs">'+chips+'</div></div>' : '')
+    + (gallery ? '<div class="amz-section"><div class="amz-sec-label">Product images('+p.product_photos.length+' images)</div><div class="amz-gallery">'+gallery+'</div></div>' : '')
+    + '<div class="amz-tab-nav" data-amztabs="'+cid+'"><button class="active">Product information</button><button>Specifications</button><button>Product description</button></div>'
     + '<div class="amz-tab-body">'
     + '<div class="amz-tab-panel active">'+bullets+'</div>'
     + '<div class="amz-tab-panel">'+spec+'</div>'
@@ -2973,7 +2982,7 @@ function renderMicProductCard(p, idx) {
     return '<span class="mic-tag">' + amzEsc(t) + '</span>';
   }).join('') + '</div>' : '';
 
-  // Tab 1: 竞品摘要
+  // Tab 1: Competitor summary
   var info = p.product_information || {};
   var summaryKeys = ['Type','Function','Voltage','Control','Applicable Height','Max Load Weight','Running Time','Certification','Production Capacity','OEM&ODM'];
   var summaryHtml = '';
@@ -2982,21 +2991,21 @@ function renderMicProductCard(p, idx) {
   });
   var cleanHl = micCleanHighlights(p.company_highlights);
   if (cleanHl.length) {
-    summaryHtml += '<div style="margin-top:10px"><span class="mic-sl">公司亮点</span></div>';
+    summaryHtml += '<div style="margin-top:10px"><span class="mic-sl">Company highlights</span></div>';
     summaryHtml += '<div class="mic-hl-group" style="margin-top:4px">' + cleanHl.map(function(h) { return '<span class="mic-hl-tag">'+amzEsc(h)+'</span>'; }).join('') + '</div>';
   }
 
-  // Tab 2: 关键规格
+  // Tab 2: Key specifications
   var specHtml = '';
   if (Object.keys(info).length) {
     specHtml = '<table class="mic-spec-table">' + Object.entries(info).map(function(kv) {
       return '<tr><td>'+amzEsc(kv[0])+'</td><td>'+amzEsc(kv[1])+'</td></tr>';
     }).join('') + '</table>';
   } else {
-    specHtml = '<p style="color:var(--fg-muted);font-size:12px">暂无规格数据</p>';
+    specHtml = '<p style="color:var(--fg-muted);font-size:12px">No specification data</p>';
   }
 
-  // Tab 3: 公司与FAQ
+  // Tab 3: Company andFAQ
   var companyHtml = '';
   if (p.company_intro) {
     companyHtml += '<p class="mic-company-intro">' + amzEsc(p.company_intro) + '</p>';
@@ -3017,7 +3026,7 @@ function renderMicProductCard(p, idx) {
         companyHtml += '<div class="mic-faq-item"><div class="mic-faq-q" onclick="this.parentElement.classList.toggle(\'open\')">' + amzEsc(f.question) + '</div><div class="mic-faq-a">' + amzEsc(f.answer).replace(/\n/g,'<br>') + '</div></div>';
       });
       companyHtml += '</div>';
-      companyHtml += '<div class="mic-faq-more" data-mic-faq-more="1">查看更多 FAQ (' + faqRest.length + '条)</div>';
+      companyHtml += '<div class="mic-faq-more" data-mic-faq-more="1">Show more FAQ (' + faqRest.length + ' entries)</div>';
     }
   }
 
@@ -3032,7 +3041,7 @@ function renderMicProductCard(p, idx) {
     + '</div>'
     + gallery
     + tagsHtml
-    + '<div class="mic-tab-nav" data-mictabs="'+cid+'"><button class="active">竞品摘要</button><button>关键规格</button><button>公司与FAQ</button></div>'
+    + '<div class="mic-tab-nav" data-mictabs="'+cid+'"><button class="active">Competitor summary</button><button>Key specifications</button><button>Company andFAQ</button></div>'
     + '<div class="mic-tab-body">'
     + '<div class="mic-tab-panel active">'+summaryHtml+'</div>'
     + '<div class="mic-tab-panel">'+specHtml+'</div>'
@@ -3068,7 +3077,7 @@ function bindMicTabs(container) {
       if (rest && rest.classList.contains('mic-faq-rest')) {
         var visible = rest.style.display !== 'none';
         rest.style.display = visible ? 'none' : 'block';
-        btn.textContent = visible ? '查看更多 FAQ' : '收起';
+        btn.textContent = visible ? 'Show more FAQ' : 'Collapse';
       }
     });
   });
@@ -3098,19 +3107,19 @@ function bindAmzTabs(container) {
 }
 
 // ===== Replication Report Detection & Rendering =====
-var REPL_SEC_RE = /^## (?:\d+\.|[一二三四五六七八九十]+[、．.])/m;
-var REPL_SEC_SPLIT_RE = /^(?=## (?:\d+\.|[一二三四五六七八九十]+[、．.]))/m;
-var REPL_SEC_HEAD_RE = /^## (?:\d+\.|[一二三四五六七八九十]+[、．.])\s*(.+)$/m;
+var REPL_SEC_RE = /^## (?:\d+\.|[IVXLC]+[.)])/m;
+var REPL_SEC_SPLIT_RE = /^(?=## (?:\d+\.|[IVXLC]+[.)]))/m;
+var REPL_SEC_HEAD_RE = /^## (?:\d+\.|[IVXLC]+[.)])\s*(.+)$/m;
 
 function isReplicationReport(text) {
   if (!text) return false;
-  var matches = text.match(/^## (?:\d+\.|[一二三四五六七八九十]+[、．.])/gm);
+  var matches = text.match(/^## (?:\d+\.|[IVXLC]+[.)])/gm);
   return matches && matches.length >= 3;
 }
 
 function renderReplicationReport(rawText) {
   var titleMatch = rawText.match(/^# (.+)$/m);
-  var reportTitle = titleMatch ? titleMatch[1].trim() : '竞品复刻与Listing优化报告';
+  var reportTitle = titleMatch ? titleMatch[1].trim() : 'Competitor replication andListingoptimization report';
   var subMatch = rawText.match(/^> (.+)$/m);
   var reportSub = subMatch ? subMatch[1].trim() : '';
 
@@ -3140,7 +3149,7 @@ function renderReplicationReport(rawText) {
   sections.forEach(function(sec, idx) {
     if (idx === 1) {
       html += '<button class="repl-fold-toggle" onclick="this.classList.toggle(\'open\');this.nextElementSibling.classList.toggle(\'visible\')">';
-      html += '<span class="fold-arrow">▼</span> 查看完整复刻结果';
+      html += '<span class="fold-arrow">▼</span> View the full replication result';
       html += '</button>';
       html += '<div class="repl-fold-body">';
       html += '<div class="repl-section">';
@@ -3180,7 +3189,7 @@ function addToolCall(bubble, id, name, args) {
   card.innerHTML =
     '<span class="tool-icon">' + toolIcon(name) + '</span>' +
     '<span class="tool-label">' + toolLabel(name) + '</span>' +
-    '<span class="tool-desc">' + (toolInputSummary(name, args) || '调用中…') + '</span>' +
+    '<span class="tool-desc">' + (toolInputSummary(name, args) || 'Running…') + '</span>' +
     '<div class="tool-output"></div>';
   container.appendChild(card);
   scrollToBottom();
@@ -3208,8 +3217,8 @@ function addToolResult(bubble, id, name, result) {
   card.classList.add('done');
   // Update desc
   const desc = card.querySelector('.tool-desc');
-  if (desc && (desc.textContent === '调用中…' || desc.textContent === '调用中...' || !desc.textContent)) {
-    desc.textContent = toolResultSummary(name, result) || '完成';
+  if (desc && (desc.textContent === 'Running…' || desc.textContent === 'Running...' || !desc.textContent)) {
+    desc.textContent = toolResultSummary(name, result) || 'Done';
   }
   // Fill output
   const output = card.querySelector('.tool-output');
@@ -3229,7 +3238,7 @@ function addToolResult(bubble, id, name, result) {
         if (previewHtml) {
           var toggleBtn = document.createElement('button');
           toggleBtn.className = 'mic-preview-toggle';
-          toggleBtn.innerHTML = '<span class="toggle-arrow">▼</span> 查看原始竞品详情结构';
+          toggleBtn.innerHTML = '<span class="toggle-arrow">▼</span> View raw competitor details';
           var frameWrap = document.createElement('div');
           frameWrap.className = 'mic-preview-frame';
           var iframe = document.createElement('iframe');
@@ -3318,7 +3327,7 @@ function renderTodoPanel(msgDiv, tasks) {
     } else {
       msgDiv.prepend(panel);
     }
-    // 首次创建面板：清空 setup 阶段积累的工具（不关联到步骤）
+    // Initialize the panel:clear setup tools collected during(without assigning them to steps)
     _pendingFlowTools = [];
   }
 
@@ -3374,6 +3383,7 @@ async function send() {
   const userText = inputEl.value.trim();
   const hasImages = attachedImages.length > 0;
   if ((!userText && !attachedFile && !hasImages) || sending) return;
+  const requestSessionId = sessionEl.value || 'default';
 
   // Switch to chat view if on welcome screen
   if (!welcomeEl.classList.contains('hidden')) showChat();
@@ -3393,7 +3403,7 @@ async function send() {
   let text = '';
   let displayText = userText;
   if (attachedFile) {
-    text = '[文件] ' + attachedFile.name + '\n\n' + attachedFile.content;
+    text = '[File] ' + attachedFile.name + '\n\n' + attachedFile.content;
     if (userText) text += '\n\n---\n\n' + userText;
     displayText = '[\u6587\u4EF6] ' + attachedFile.name + (userText ? '\n' + userText : '');
     clearAttachment();
@@ -3417,7 +3427,7 @@ async function send() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId: document.getElementById('userId').value || 'test',
-        sessionId: sessionEl.value || 'default',
+        sessionId: requestSessionId,
         requestId: Math.random().toString(36).slice(2, 10),
         data: { input: text, images: imageUrls },
       }),
@@ -3443,21 +3453,25 @@ async function send() {
 
         if (event.code === 2) {
           rawText += event.content;
-          bubble.innerHTML = renderMarkdown(rawText);
+          bubble.innerHTML = renderMarkdown(skillProposalVisibleText(rawText) || 'Preparing skill proposal…');
           scrollToBottom();
 
+        } else if (event.code === 12) {
+          appendSkillProposals(bubble, event.content, requestSessionId);
         } else if (event.code === 3) {
           if (event.content === 'stream_start') {
-            bubble.textContent = '思考中...';
+            bubble.textContent = 'Thinking...';
           } else if (event.content === 'stream_end') {
             if (!rawText) {
               if (bubble.parentElement && bubble.parentElement.querySelector('.tool-tags')) {
                 bubble.textContent = '';
               } else {
-                bubble.textContent = '（无回复）';
+                bubble.textContent = '(No response)';
               }
             }
 
+            appendSkillProposals(bubble, rawText, requestSessionId);
+            if (rawText.includes('[SKILL_PROPOSAL]')) bubble.innerHTML = renderMarkdown(skillProposalVisibleText(rawText));
             loadSessions();
             loadSidebarFiles();
           } else if (event.content.startsWith('error')) {
@@ -3471,8 +3485,8 @@ async function send() {
           let info;
           try { info = JSON.parse(event.content); } catch { info = { name: '?', arguments: event.content }; }
           if (info.name === 'todo_manager' || info.name === 'ask_user_question') continue;
-          // skill_manager 是基础设施调用，不进入心流徽章
-          if (info.name !== 'skill_manager') {
+          // skill is an infrastructure call,do not add it to progress badges
+          if (info.name !== 'skill') {
             _pendingFlowTools.push({ icon: toolIcon(info.name), label: toolLabel(info.name) });
           }
           addToolCall(bubble, info.id || '', info.name, info.arguments || '');
@@ -3482,9 +3496,9 @@ async function send() {
           try { info = JSON.parse(event.content); } catch { info = { name: '?', result: event.content }; }
           if (info.name === 'todo_manager' || info.name === 'ask_user_question') continue;
           addToolResult(bubble, info.id || '', info.name, info.result || '');
-          // Detect skill_manager save success -> toast + refresh
-          if (info.name === 'skill_manager' && typeof info.result === 'string' && info.result.includes('已保存')) {
-            const nameMatch = info.result.match(/技能\s*['"]?([^'"]+?)['"]?\s*已保存/);
+          // Detect skill save success -> toast + refresh
+          if (info.name === 'skill' && typeof info.result === 'string' && info.result.includes('saved')) {
+            const nameMatch = info.result.match(/Skill\s+['"]([^'"]+)['"]\s+saved/i);
             if (nameMatch) { showSkillToast(nameMatch[1]); loadSidebarSkills(); }
           }
         } else if (event.code === 6) {
@@ -3507,11 +3521,11 @@ async function send() {
             const data = JSON.parse(event.content);
             if (data.action === 'create' && data.task) {
               saveTask(data.task);
-              showTaskToast('已创建定时任务: ' + data.task.name);
+              showTaskToast('Created scheduled task: ' + data.task.name);
               loadSidebarTasks();
             } else if (data.action === 'delete' && data.task_id) {
               removeTask(data.task_id);
-              showTaskToast('已删除定时任务');
+              showTaskToast('Deleted scheduled task');
               loadSidebarTasks();
             }
           } catch(e) { console.error('code 7 parse error:', e); }
@@ -3550,7 +3564,7 @@ async function send() {
   } catch (err) {
     const errDiv = document.createElement('div');
     errDiv.style.cssText = 'color:#ff3b30;margin-top:8px;font-size:0.82rem';
-    errDiv.textContent = '请求失败: ' + err.message;
+    errDiv.textContent = 'Request failed: ' + err.message;
     bubble.appendChild(errDiv);
   }
 
@@ -3592,7 +3606,7 @@ async function generateOpportunity() {
         userId: userId,
         sessionId: oppSessionId,
         requestId: Math.random().toString(36).slice(2, 10),
-        data: { input: '根据我的用户画像，生成今日任务建议和工作提醒，不需要询问更多信息，直接输出。' },
+        data: { input: 'Based on my user profile, generate daily task suggestions and work reminders. Return the result directly without asking for more information.' },
       }),
       signal: oppAbortController.signal,
     });
@@ -3619,9 +3633,9 @@ async function generateOpportunity() {
           oppArticleEl.innerHTML = renderMarkdown(rawText);
         } else if (event.code === 3) {
           if (event.content === 'stream_start') {
-            oppLoadingEl.textContent = '分析中';
+            oppLoadingEl.textContent = 'Analyzing';
           } else if (event.content === 'stream_end') {
-            if (!rawText) oppArticleEl.innerHTML = '<p style="color:var(--fg-muted)">暂无商机数据</p>';
+            if (!rawText) oppArticleEl.innerHTML = '<p style="color:var(--fg-muted)">No opportunity data</p>';
             oppLoadingEl.classList.add('hidden');
             loadSessions();
           } else if (event.content.startsWith('error')) {
@@ -3635,7 +3649,7 @@ async function generateOpportunity() {
   } catch (err) {
     if (err.name !== 'AbortError') {
       oppLoadingEl.classList.add('hidden');
-      oppArticleEl.innerHTML = '<p style="color:#ff3b30;font-size:0.82rem">请求失败: ' + err.message + '</p>';
+      oppArticleEl.innerHTML = '<p style="color:#ff3b30;font-size:0.82rem">Request failed: ' + err.message + '</p>';
     }
   }
 
@@ -3660,7 +3674,7 @@ function closeOpportunity() {
 async function updateSession() {
   const userId = document.getElementById('userId').value || 'test';
   const sid = sessionEl.value;
-  if (!sid || sid === 'default') { alert('请先进行一段对话再更新。'); return; }
+  if (!sid || sid === 'default') { alert('Start a conversation before updating memory.'); return; }
   if (sending) return;
 
   if (!welcomeEl.classList.contains('hidden')) showChat();
@@ -3670,7 +3684,7 @@ async function updateSession() {
   sendBtn.disabled = true;
   updateBtn.disabled = true;
 
-  addUserMsg('更新画像和记忆');
+  addUserMsg('Update profile and memory');
   const botDiv = createBotMsg();
   const bubble = botDiv.querySelector('.bubble');
   let rawText = '';
@@ -3702,37 +3716,21 @@ async function updateSession() {
 
         if (event.code === 2) {
           rawText += event.content;
-          bubble.innerHTML = renderMarkdown(rawText);
+          bubble.innerHTML = renderMarkdown(skillProposalVisibleText(rawText) || 'Preparing skill proposal…');
           scrollToBottom();
         } else if (event.code === 3) {
           if (event.content === 'stream_start') {
-            bubble.textContent = '正在分析对话...';
+            bubble.textContent = 'Analyzing conversation...';
           } else if (event.content === 'stream_end') {
             if (!rawText) {
               if (bubble.parentElement && bubble.parentElement.querySelector('.tool-tags')) {
                 bubble.textContent = '';
               } else {
-                bubble.textContent = '本次对话无需更新。';
+                bubble.textContent = 'No updates needed for this conversation.';
               }
             }
-            // Parse SKILL_PROPOSAL blocks from update agent
-            const proposalMatch = rawText.match(/\[SKILL_PROPOSAL\]([\s\S]*?)\[\/SKILL_PROPOSAL\]/);
-            if (proposalMatch) {
-              const proposal = parseSkillProposal(proposalMatch[1].trim());
-              if (proposal.name) {
-                const card = document.createElement('div');
-                card.className = 'skill-proposal-card';
-                const pJson = JSON.stringify(proposal).replace(/"/g, '&quot;');
-                card.innerHTML = '<div style="font-weight:500;margin-bottom:6px;font-family:var(--font-display);color:var(--accent)">发现新技能模式</div>' +
-                  '<div style="font-weight:500">' + proposal.name + '</div>' +
-                  '<div style="color:var(--fg-muted);font-size:0.82rem">' + proposal.description + '</div>' +
-                  '<div style="margin-top:8px;display:flex;gap:8px">' +
-                    '<button class="skill-confirm-btn" onclick="confirmSkillProposal(this, &quot;' + btoa(unescape(encodeURIComponent(JSON.stringify(proposal)))) + '&quot;)">确认保存</button>' +
-                    '<button class="skill-skip-btn" onclick="this.closest(\'.skill-proposal-card\').remove()">跳过</button>' +
-                  '</div>';
-                bubble.parentElement.appendChild(card);
-              }
-            }
+            appendSkillProposals(bubble, rawText, sid);
+            if (rawText.includes('[SKILL_PROPOSAL]')) bubble.innerHTML = renderMarkdown(skillProposalVisibleText(rawText));
 
             loadSidebarFiles();
           } else if (event.content.startsWith('error')) {
@@ -3755,7 +3753,7 @@ async function updateSession() {
   } catch (err) {
     const errDiv = document.createElement('div');
     errDiv.style.cssText = 'color:#ff3b30;margin-top:8px;font-size:0.82rem';
-    errDiv.textContent = '请求失败: ' + err.message;
+    errDiv.textContent = 'Request failed: ' + err.message;
     bubble.appendChild(errDiv);
   }
 
@@ -3774,7 +3772,7 @@ async function uploadImageFiles(files) {
   const validFiles = [];
   for (const file of files) {
     if (!file.type.match(/^image\/(png|jpe?g|webp)$/)) {
-      alert('仅支持 PNG/JPG/WEBP 图片: ' + file.name);
+      alert('Only supported PNG/JPG/WEBP Image: ' + file.name);
       continue;
     }
     validFiles.push(file);
@@ -3802,7 +3800,7 @@ async function uploadImageFiles(files) {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || '上传失败');
+      throw new Error(err.detail || 'Upload failed');
     }
     const data = await res.json();
 
@@ -3816,7 +3814,7 @@ async function uploadImageFiles(files) {
     }
     renderImagePreviews();
   } catch (err) {
-    alert('图片上传失败: ' + err.message);
+    alert('Image upload failed: ' + err.message);
     imagePreviewBar.innerHTML = '';
     renderImagePreviews();
   }
@@ -3909,7 +3907,7 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
 
   const name = file.name.toLowerCase();
   if (!name.endsWith('.md') && !name.endsWith('.txt') && !name.endsWith('.text') && !name.endsWith('.markdown')) {
-    alert('仅支持 .md 和 .txt 文件');
+    alert('Only .md and .txt files are supported');
     return;
   }
 
@@ -3917,16 +3915,16 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
   reader.onload = () => {
     const content = reader.result;
     if (content.length > MAX_FILE_CHARS) {
-      alert('文件内容过长（' + content.length + ' 字符，上限 ' + MAX_FILE_CHARS + '），请缩减后重试。');
+      alert('File content is too long(' + content.length + ' characters,limit ' + MAX_FILE_CHARS + '),shorten it and retry.');
       return;
     }
     attachedFile = { name: file.name, content: content };
-    document.getElementById('fileTagName').textContent = file.name + ' (' + content.length + ' 字符)';
+    document.getElementById('fileTagName').textContent = file.name + ' (' + content.length + ' characters)';
     document.getElementById('fileTag').classList.add('visible');
     inputEl.focus();
   };
   reader.onerror = () => {
-    alert('读取文件失败');
+    alert('Failed to read file');
   };
   reader.readAsText(file, 'UTF-8');
 });
@@ -3944,7 +3942,7 @@ async function loadSessions() {
     if (sessions.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'sidebar-empty';
-      empty.textContent = '暂无历史会话';
+      empty.textContent = 'No previous sessions';
       sidebarListEl.appendChild(empty);
     } else {
       sessions.forEach(s => sidebarListEl.appendChild(createSessionCard(s)));
@@ -3983,8 +3981,8 @@ function parseUserProfile(content) {
     if (line.trim() === '---') { inFrontmatter = !inFrontmatter; continue; }
     if (inFrontmatter) continue;
     if (line.startsWith('## ')) continue;
-    if (/^（.*）$/.test(line.trim())) continue;
-    const m = line.match(/^(.+?)：(.*)$/);
+    if (/^\(.*\)$/.test(line.trim())) continue;
+    const m = line.match(/^(.+?)[:\uFF1A](.*)$/);
     if (m) {
       fields.push({ name: m[1].trim(), value: m[2].trim() });
     }
@@ -3995,7 +3993,7 @@ function parseUserProfile(content) {
 function renderProfileTable(fields) {
   const el = document.getElementById('profileTable');
   if (!fields || fields.length === 0) {
-    el.innerHTML = '<div class="sidebar-section-empty">暂无画像信息</div>';
+    el.innerHTML = '<div class="sidebar-section-empty">No profile information</div>';
     return;
   }
   const table = document.createElement('table');
@@ -4012,7 +4010,7 @@ function renderProfileTable(fields) {
       tdVal.textContent = f.value;
     } else {
       tdVal.className = 'field-empty';
-      tdVal.textContent = '未填写';
+      tdVal.textContent = 'Not provided';
     }
     tr.appendChild(tdVal);
     table.appendChild(tr);
@@ -4030,7 +4028,7 @@ function renderMemory(content) {
     if (end !== -1) body = body.slice(end + 3).trim();
   }
   if (!body) {
-    el.innerHTML = '<div class="sidebar-section-empty">暂无记忆</div>';
+    el.innerHTML = '<div class="sidebar-section-empty">No memories yet</div>';
     return;
   }
   const div = document.createElement('div');
@@ -4071,12 +4069,12 @@ async function loadSidebarSubAgents() {
     const countEl = document.getElementById('subAgentCount');
     if (countEl) countEl.textContent = data.count || 0;
     if (!data.types || !data.types.length) {
-      el.innerHTML = '<div class="sidebar-section-empty">暂无子 agent<br><span style="font-size:0.75rem;color:var(--fg-muted)">在 configs/agents/ 添加 .md 配置</span></div>';
+      el.innerHTML = '<div class="sidebar-section-empty">No sub-agents<br><span style="font-size:0.75rem;color:var(--fg-muted)">Add .md configurations under configs/agents/</span></div>';
       return;
     }
     el.innerHTML = data.types.map(t => {
       const skillsLine = (t.skills && t.skills.length)
-        ? '<div class="skill-card-meta"><span>技能: ' + t.skills.slice(0, 3).join(', ') + '</span></div>'
+        ? '<div class="skill-card-meta"><span>Skill: ' + t.skills.slice(0, 3).join(', ') + '</span></div>'
         : '';
       return '<div class="skill-card">' +
         '<div class="skill-card-name">🤖 ' + (t.name || '') + '</div>' +
@@ -4099,11 +4097,11 @@ async function loadSidebarSkills() {
     const countEl = document.getElementById('skillCount');
     if (countEl) countEl.textContent = data.count || 0;
     if (!data.skills || !data.skills.length) {
-      el.innerHTML = '<div class="sidebar-section-empty">暂无技能</div>';
+      el.innerHTML = '<div class="sidebar-section-empty">No skills available</div>';
       return;
     }
     el.innerHTML = data.skills.map(s => {
-      const sourceLabel = s.source === 'builtin' ? '内置' : (s.source === 'user_defined' ? '自定义' : '学习');
+      const sourceLabel = s.source === 'builtin' ? 'Built-in' : (s.source === 'user_defined' ? 'User-defined' : 'Learned');
       const triggers = (s.triggers || []).slice(0, 3).map(t => '<span class="skill-trigger">' + t + '</span>').join('');
       return '<div class="skill-card">' +
         '<div class="skill-card-name">' + skillLabel(s.name) + '</div>' +
@@ -4111,7 +4109,7 @@ async function loadSidebarSkills() {
         '<div class="skill-card-meta">' +
           '<span class="skill-badge ' + s.source + '">' + sourceLabel + '</span>' +
           '<span>v' + (s.version || 1) + '</span>' +
-          '<span>使用 ' + (s.usage_count || 0) + ' 次</span>' +
+          '<span>Use ' + (s.usage_count || 0) + ' times</span>' +
         '</div>' +
         (triggers ? '<div>' + triggers + '</div>' : '') +
       '</div>';
@@ -4123,31 +4121,115 @@ async function loadSidebarSkills() {
 function showSkillToast(name) {
   const t = document.createElement('div');
   t.className = 'skill-toast';
-  t.textContent = '学会新技能: ' + name;
+  t.textContent = 'New skill learned: ' + name;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3000);
 }
 
 function parseSkillProposal(text) {
-  const get = (key) => {
-    const m = text.match(new RegExp('^' + key + ':\\s*(.+)$', 'm'));
-    return m ? m[1].trim() : '';
+  const clean = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  let proposal;
+  if (clean.startsWith('{')) {
+    proposal = JSON.parse(clean);
+  } else {
+    // Preserve the original single-file proposal format. Multi-file proposals
+    // use JSON so indented reference bodies cannot be swallowed by instructions.
+    if (/^references[ \t]*:/m.test(clean)) throw new Error('Proposals containing references must use JSON format');
+    const get = (key) => {
+      const match = clean.match(new RegExp('^' + key + ':[ \\t]*(.*)$', 'm'));
+      return match ? match[1].trim() : '';
+    };
+    const instructions = clean.match(/instructions:[ \t]*\|?\r?\n([\s\S]*?)$/);
+    proposal = {
+      name: get('name'), description: get('description'), triggers: get('triggers'),
+      required_tools: get('required_tools'), instructions: instructions ? instructions[1].trim() : '',
+    };
+  }
+  if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) throw new Error('Invalid proposal format');
+  for (const key of ['name', 'description', 'instructions']) {
+    if (typeof proposal[key] !== 'string' || !proposal[key].trim()) throw new Error('Proposal is missing ' + key);
+  }
+  const list = (value) => {
+    if (value == null) return [];
+    if (typeof value === 'string') return value.split(',').map(s => s.trim()).filter(Boolean);
+    if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) throw new Error('Invalid proposal list field');
+    return value;
   };
-  const instrMatch = text.match(/instructions:\s*\|?\n([\s\S]*?)$/);
+  const references = proposal.references === undefined ? {} : proposal.references;
+  if (!references || typeof references !== 'object' || Array.isArray(references)
+      || Object.values(references).some(content => typeof content !== 'string' || !content.trim())) {
+    throw new Error('references must map file paths to nonempty text bodies');
+  }
   return {
-    name: get('name'),
-    description: get('description'),
-    triggers: get('triggers').split(',').map(s => s.trim()).filter(Boolean),
-    required_tools: get('required_tools').split(',').map(s => s.trim()).filter(Boolean),
-    instructions: instrMatch ? instrMatch[1].trim() : '',
+    name: proposal.name.trim(), description: proposal.description.trim(),
+    triggers: list(proposal.triggers), required_tools: list(proposal.required_tools),
+    instructions: proposal.instructions, references, tags: list(proposal.tags),
   };
+}
+
+function skillProposalVisibleText(text) {
+  return text.replace(/\[SKILL_PROPOSAL\][\s\S]*?\[\/SKILL_PROPOSAL\]/g, '')
+    .replace(/\[SKILL_PROPOSAL\][\s\S]*$/, '').trim();
+}
+
+function appendSkillProposals(bubble, rawText, sessionId) {
+  if (rawText.lastIndexOf('[SKILL_PROPOSAL]') > rawText.lastIndexOf('[/SKILL_PROPOSAL]')) {
+    const message = document.createElement('div');
+    message.textContent = 'Skill proposal output is incomplete and has not been saved. Ask the Agent to output the complete proposal again.';
+    bubble.parentElement.appendChild(message);
+  }
+  for (const match of rawText.matchAll(/\[SKILL_PROPOSAL\]([\s\S]*?)\[\/SKILL_PROPOSAL\]/g)) {
+    let proposal;
+    try {
+      proposal = parseSkillProposal(match[1]);
+    } catch (error) {
+      const message = document.createElement('div');
+      message.textContent = 'Skill proposal was not saved: ' + error.message + '. Ask the Agent to output the complete proposal again.';
+      bubble.parentElement.appendChild(message);
+      continue;
+    }
+    proposal.source = 'extracted';
+    proposal.extracted_from = sessionId || null;
+    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(proposal))));
+    if ([...bubble.parentElement.querySelectorAll('.skill-proposal-card')].some(card => card.dataset.proposal === encoded)) continue;
+    const card = document.createElement('div');
+    card.className = 'skill-proposal-card';
+    card.dataset.proposal = encoded;
+    const addText = (tag, text) => {
+      const node = document.createElement(tag);
+      node.textContent = text;
+      card.appendChild(node);
+      return node;
+    };
+    addText('strong', proposal.name);
+    addText('p', proposal.description);
+    const preview = (filename, content) => {
+      const details = document.createElement('details');
+      const title = document.createElement('summary');
+      title.textContent = filename + '(' + content.length + ' characters)';
+      const body = document.createElement('pre');
+      body.textContent = content;
+      body.style.whiteSpace = 'pre-wrap';
+      details.append(title, body);
+      card.appendChild(details);
+    };
+    preview('SKILL.md', proposal.instructions);
+    for (const [filename, content] of Object.entries(proposal.references)) preview('references/' + filename.replace(/^references\//, ''), content);
+    const save = addText('button', 'Confirm save (includes ' + Object.keys(proposal.references).length + ' reference files)');
+    save.className = 'skill-confirm-btn';
+    save.addEventListener('click', () => confirmSkillProposal(save, encoded));
+    const skip = addText('button', 'Skip');
+    skip.className = 'skill-skip-btn';
+    skip.addEventListener('click', () => card.remove());
+    bubble.parentElement.appendChild(card);
+  }
 }
 
 async function confirmSkillProposal(btn, proposalB64) {
   const userId = document.getElementById('userId').value || 'test';
   const proposal = JSON.parse(decodeURIComponent(escape(atob(proposalB64))));
   btn.disabled = true;
-  btn.textContent = '保存中...';
+  btn.textContent = 'Saving...';
   try {
     const res = await fetch('/api/skills/' + encodeURIComponent(userId) + '/create', {
       method: 'POST',
@@ -4155,15 +4237,15 @@ async function confirmSkillProposal(btn, proposalB64) {
       body: JSON.stringify(proposal),
     });
     if (res.ok) {
-      btn.closest('.skill-proposal-card').innerHTML = '<div style="color:#16a34a;font-weight:500">✓ 技能已保存</div>';
+      btn.closest('.skill-proposal-card').innerHTML = '<div style="color:#16a34a;font-weight:500">✓ Skill saved</div>';
       showSkillToast(proposal.name);
       loadSidebarSkills();
     } else {
-      btn.textContent = '保存失败，重试';
+      btn.textContent = 'Save failed; retry';
       btn.disabled = false;
     }
   } catch(e) {
-    btn.textContent = '保存失败，重试';
+    btn.textContent = 'Save failed; retry';
     btn.disabled = false;
   }
 }
@@ -4208,12 +4290,12 @@ function loadSidebarTasks() {
   if (!el) return;
 
   if (!tasks.length) {
-    el.innerHTML = '<div class="sidebar-section-empty">暂无定时任务</div>' +
-      '<button class="task-add-btn" onclick="showTaskForm()">+ 新建任务</button>';
+    el.innerHTML = '<div class="sidebar-section-empty">No scheduled tasks</div>' +
+      '<button class="task-add-btn" onclick="showTaskForm()">+ New task</button>';
     return;
   }
 
-  const repeatLabels = { daily: '每天', weekly: '每周', once: '仅一次' };
+  const repeatLabels = { daily: 'Daily', weekly: 'Weekly', once: 'Once' };
   el.innerHTML = tasks.map(t => {
     const time = String(t.hour).padStart(2, '0') + ':' + String(t.minute).padStart(2, '0');
     const repeat = repeatLabels[t.repeat] || t.repeat;
@@ -4224,10 +4306,10 @@ function loadSidebarTasks() {
         (t.skill ? '<div class="task-card-skill">' + t.skill + '</div>' : '') +
       '</div>' +
       '<button class="task-toggle ' + (t.enabled ? 'on' : '') + '" onclick="toggleTask(\'' + t.id + '\')"></button>' +
-      '<button class="task-del-btn" onclick="deleteTask(\'' + t.id + '\')" title="删除">✕</button>' +
+      '<button class="task-del-btn" onclick="deleteTask(\'' + t.id + '\')" title="Delete">✕</button>' +
     '</div>';
   }).join('') +
-  '<button class="task-add-btn" onclick="showTaskForm()">+ 新建任务</button>';
+  '<button class="task-add-btn" onclick="showTaskForm()">+ New task</button>';
 }
 
 function toggleTask(taskId) {
@@ -4237,7 +4319,7 @@ function toggleTask(taskId) {
 }
 
 function deleteTask(taskId) {
-  if (!confirm('确定删除此任务？')) return;
+  if (!confirm('Delete this task?')) return;
   removeTask(taskId);
   loadSidebarTasks();
 }
@@ -4250,21 +4332,21 @@ function showTaskForm() {
   const form = document.createElement('div');
   form.className = 'task-form';
   form.innerHTML =
-    '<label>任务名称</label>' +
-    '<input type="text" id="taskFormName" placeholder="例：每日数据分析">' +
-    '<label>执行提示词</label>' +
-    '<textarea id="taskFormPrompt" placeholder="发送给 Agent 的指令内容"></textarea>' +
+    '<label>Task name</label>' +
+    '<input type="text" id="taskFormName" placeholder="Example: Daily data analysis">' +
+    '<label>Execution prompt</label>' +
+    '<textarea id="taskFormPrompt" placeholder="Send to Agent instructions"></textarea>' +
     '<div class="task-form-row">' +
-      '<div><label>时间</label><input type="time" id="taskFormTime" value="08:00"></div>' +
-      '<div><label>重复</label><select id="taskFormRepeat">' +
-        '<option value="daily">每天</option>' +
-        '<option value="weekly">每周</option>' +
-        '<option value="once">仅一次</option>' +
+      '<div><label>Time</label><input type="time" id="taskFormTime" value="08:00"></div>' +
+      '<div><label>Repeat</label><select id="taskFormRepeat">' +
+        '<option value="daily">Daily</option>' +
+        '<option value="weekly">Weekly</option>' +
+        '<option value="once">Once</option>' +
       '</select></div>' +
     '</div>' +
     '<div class="task-form-actions">' +
-      '<button class="task-form-cancel" onclick="this.closest(\'.task-form\').remove()">取消</button>' +
-      '<button class="task-form-save" onclick="createTaskFromForm()">创建</button>' +
+      '<button class="task-form-cancel" onclick="this.closest(\'.task-form\').remove()">Cancel</button>' +
+      '<button class="task-form-save" onclick="createTaskFromForm()">Create</button>' +
     '</div>';
   el.insertBefore(form, el.firstChild);
 }
@@ -4274,7 +4356,7 @@ function createTaskFromForm() {
   const prompt = document.getElementById('taskFormPrompt').value.trim();
   const timeVal = document.getElementById('taskFormTime').value;
   const repeat = document.getElementById('taskFormRepeat').value;
-  if (!name || !prompt) { alert('请填写任务名称和提示词'); return; }
+  if (!name || !prompt) { alert('Enter a task name and prompt'); return; }
   const [h, m] = timeVal.split(':').map(Number);
   const task = {
     id: 't_' + Date.now(),
@@ -4288,7 +4370,7 @@ function createTaskFromForm() {
     lastRun: '',
   };
   saveTask(task);
-  showTaskToast('已创建定时任务: ' + name);
+  showTaskToast('Created scheduled task: ' + name);
   loadSidebarTasks();
 }
 
@@ -4355,7 +4437,7 @@ function notifyTaskComplete(taskName) {
   if (!('Notification' in window) || Notification.permission !== 'granted' || document.hasFocus()) return;
   try {
     const n = new Notification('EvoAgent', {
-      body: '定时任务已完成: ' + taskName,
+      body: 'Scheduled task completed: ' + taskName,
       tag: 'task-' + taskName,
     });
     n.onclick = function() { window.focus(); n.close(); };
@@ -4386,16 +4468,16 @@ function createSessionCard(session) {
   if (session.session_id && session.session_id.startsWith('opp-')) {
     const tag = document.createElement('span');
     tag.className = 'session-tag';
-    tag.textContent = '商机';
+    tag.textContent = 'Opportunities';
     preview.appendChild(tag);
   } else if (session.session_id && session.session_id.startsWith('sched_')) {
     const tag = document.createElement('span');
     tag.className = 'session-tag';
     tag.style.cssText = 'background:#dcfce7;color:#16a34a';
-    tag.textContent = '定时';
+    tag.textContent = 'Scheduled';
     preview.appendChild(tag);
   }
-  preview.appendChild(document.createTextNode(session.preview || '新对话'));
+  preview.appendChild(document.createTextNode(session.preview || 'New conversation'));
   card.appendChild(preview);
 
   const meta = document.createElement('div');
@@ -4420,7 +4502,7 @@ function createSessionCard(session) {
   }
 
   const countSpan = document.createElement('span');
-  countSpan.textContent = (session.message_count || 0) + ' 条消息';
+  countSpan.textContent = (session.message_count || 0) + ' messages';
   meta.appendChild(countSpan);
 
   card.appendChild(meta);
@@ -4495,7 +4577,7 @@ async function restoreSession(sid) {
         if (lastBotBubble) {
           const name = msg.name || '?';
           const content = msg.content || '';
-          // todo_manager → 恢复心流面板（只保留最后一次快照）
+          // todo_manager → restore progress panel(keep only the latest snapshot)
           if (name === 'todo_manager') {
             try {
               var td = JSON.parse(content);
@@ -4532,7 +4614,7 @@ async function restoreSession(sid) {
       c.classList.toggle('active', c.dataset.sid === sid);
     });
   } catch (err) {
-    alert('恢复会话失败: ' + err.message);
+    alert('Session restore failed: ' + err.message);
   }
 }
 
@@ -4548,7 +4630,7 @@ function insertPreviewCard(bubble, previewId, title, sizeKb) {
     '<div class="hpc-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg></div>' +
     '<div class="hpc-info">' +
       '<div class="hpc-title">' + DOMPurify.sanitize(title) + '</div>' +
-      '<div class="hpc-hint">HTML 页面' + (sizeKb ? ' · ' + sizeKb + 'KB' : '') + ' · 点击预览</div>' +
+      '<div class="hpc-hint">HTML page' + (sizeKb ? ' · ' + sizeKb + 'KB' : '') + ' · Click to preview</div>' +
     '</div>' +
     '<div class="hpc-arrow">›</div>';
   card.onclick = function() { fetchAndOpenPreview(previewId, title); };
@@ -4571,12 +4653,12 @@ async function fetchAndOpenPreview(previewId, title) {
   // Close other right panels
   if (!growthPanel.classList.contains('hidden')) { growthPanel.classList.add('hidden'); growthToggleBtn.classList.remove('active'); }
   panel.classList.remove('hidden');
-  frame.srcdoc = '<div style="text-align:center;padding:40px;color:#87867f">加载中...</div>';
+  frame.srcdoc = '<div style="text-align:center;padding:40px;color:#87867f">Loading...</div>';
   try {
     const html = await fetchPreviewHtml(previewId);
     frame.srcdoc = html;
   } catch (e) {
-    frame.srcdoc = '<div style="text-align:center;padding:40px;color:#ff3b30">加载失败: ' + e.message + '</div>';
+    frame.srcdoc = '<div style="text-align:center;padding:40px;color:#ff3b30">Load failed: ' + e.message + '</div>';
   }
 }
 
@@ -4592,7 +4674,7 @@ async function openPreviewNewTab() {
     const w = window.open('', '_blank');
     w.document.write(html);
     w.document.close();
-  } catch (e) { alert('加载失败: ' + e.message); }
+  } catch (e) { alert('Load failed: ' + e.message); }
 }
 
 // ========== Growth Panel ==========
@@ -4608,14 +4690,14 @@ function toggleGrowth() {
 async function loadGrowthData() {
   const uid = document.getElementById('userId').value || 'test';
   const body = document.getElementById('growthBody');
-  body.innerHTML = '<div class="gp-empty">加载中...</div>';
+  body.innerHTML = '<div class="gp-empty">Loading...</div>';
 
   try {
     const res = await fetch('/api/skills/' + encodeURIComponent(uid));
     const data = res.ok ? await res.json() : { skills: [], count: 0 };
     renderSkillEvolution(data.skills || []);
   } catch (e) {
-    body.innerHTML = '<div class="gp-empty" style="color:#b53333">加载失败</div>';
+    body.innerHTML = '<div class="gp-empty" style="color:#b53333">Load failed</div>';
     console.error('Growth panel error:', e);
   }
 }
@@ -4624,16 +4706,16 @@ function getSkillMaturity(skill) {
   const u = skill.usage_count || 0;
   const sr = skill.success_rate != null ? skill.success_rate : 1.0;
   // Warm palette: terracotta / sage / coral / stone
-  if (u >= 10 && sr >= 0.85) return { stage: 4, name: '精通', color: '#c96442', pct: 100 };
-  if (u >= 4 && sr >= 0.7)   return { stage: 3, name: '成熟', color: '#7a8a6f', pct: 70 };
-  if (u >= 1)                return { stage: 2, name: '成长', color: '#d97757', pct: 40 };
-  return { stage: 1, name: '萌芽', color: '#87867f', pct: 10 };
+  if (u >= 10 && sr >= 0.85) return { stage: 4, name: 'Expert', color: '#c96442', pct: 100 };
+  if (u >= 4 && sr >= 0.7)   return { stage: 3, name: 'Established', color: '#7a8a6f', pct: 70 };
+  if (u >= 1)                return { stage: 2, name: 'Growing', color: '#d97757', pct: 40 };
+  return { stage: 1, name: 'Emerging', color: '#87867f', pct: 10 };
 }
 
 function getSourceInfo(skill) {
-  if (skill.source === 'extracted') return { icon: '', label: '学习', cls: 'gp-source-extracted' };
-  if (skill.source === 'user_defined') return { icon: '', label: '自定义', cls: 'gp-source-user' };
-  return { icon: '', label: '内置', cls: 'gp-source-builtin' };
+  if (skill.source === 'extracted') return { icon: '', label: 'Learned', cls: 'gp-source-extracted' };
+  if (skill.source === 'user_defined') return { icon: '', label: 'User-defined', cls: 'gp-source-user' };
+  return { icon: '', label: 'Built-in', cls: 'gp-source-builtin' };
 }
 
 function buildTimeline(skills) {
@@ -4641,11 +4723,11 @@ function buildTimeline(skills) {
   for (const s of skills) {
     const src = getSourceInfo(s);
     if (s.created_at) {
-      const actionMap = { builtin: '被激活', extracted: '从对话中学习', user_defined: '由用户创建' };
-      events.push({ date: s.created_at.slice(0, 10), icon: src.icon, text: s.name + ' ' + (actionMap[s.source] || '被添加') });
+      const actionMap = { builtin: 'activated', extracted: 'learned from conversation', user_defined: 'created by the user' };
+      events.push({ date: s.created_at.slice(0, 10), icon: src.icon, text: s.name + ' ' + (actionMap[s.source] || 'added') });
     }
     if (s.updated_at && s.created_at && s.updated_at.slice(0, 10) !== s.created_at.slice(0, 10)) {
-      events.push({ date: s.updated_at.slice(0, 10), icon: '\u2192', text: s.name + ' 更新至 v' + (s.version || 1) });
+      events.push({ date: s.updated_at.slice(0, 10), icon: '\u2192', text: s.name + ' updated to v' + (s.version || 1) });
     }
   }
   events.sort((a, b) => b.date.localeCompare(a.date));
@@ -4661,7 +4743,7 @@ function renderSkillEvolution(skills) {
   const body = document.getElementById('growthBody');
 
   if (!skills.length) {
-    body.innerHTML = '<div class="gp-empty">暂无技能<br><span style="font-size:0.75rem;color:var(--fg-muted)">与 EvoAgent 对话后，技能会自动生成</span></div>';
+    body.innerHTML = '<div class="gp-empty">No skills available<br><span style="font-size:0.75rem;color:var(--fg-muted)">Chat with EvoAgent to discover reusable skills</span></div>';
     return;
   }
 
@@ -4679,15 +4761,15 @@ function renderSkillEvolution(skills) {
   html += '<div class="gp-overview">' +
     '<div class="gp-overview-top">' +
       '<img class="gp-overview-icon" src="/static/resources/brain_circuit.svg" width="28" height="28">' +
-      '<span class="gp-overview-title">EvoAgent 技能图谱</span>' +
+      '<span class="gp-overview-title">EvoAgent Skill map</span>' +
     '</div>' +
-    '<div class="gp-overview-dots">' + dots + ' <span style="font-size:0.72rem;opacity:0.7">' + activatedCount + '/' + skills.length + ' 已激活</span></div>' +
+    '<div class="gp-overview-dots">' + dots + ' <span style="font-size:0.72rem;opacity:0.7">' + activatedCount + '/' + skills.length + ' activated</span></div>' +
     '<div class="gp-overview-stats">' +
-      '<span class="gp-stat-chip">内置 ' + builtinCount + '</span>' +
-      '<span class="gp-stat-chip">学习 ' + extractedCount + '</span>' +
-      '<span class="gp-stat-chip">自定义 ' + userCount + '</span>' +
+      '<span class="gp-stat-chip">Built-in ' + builtinCount + '</span>' +
+      '<span class="gp-stat-chip">Learned ' + extractedCount + '</span>' +
+      '<span class="gp-stat-chip">User-defined ' + userCount + '</span>' +
     '</div>' +
-    '<div class="gp-overview-row"><span>总调用 ' + totalUsage + ' 次</span><span>平均成功率 ' + avgSuccess + '%</span></div>' +
+    '<div class="gp-overview-row"><span>Total calls ' + totalUsage + ' times</span><span>Average success rate ' + avgSuccess + '%</span></div>' +
   '</div>';
 
   // B. Skill evolution cards
@@ -4711,9 +4793,9 @@ function renderSkillEvolution(skills) {
       '<div class="gp-maturity-bar"><div class="gp-maturity-fill" style="width:' + m.pct + '%;background:' + m.color + '"></div></div>' +
       '<div class="gp-maturity-label" style="color:' + m.color + '">' + m.name + '</div>' +
       '<div class="gp-skill-metrics">' +
-        '<span>调用 ' + (s.usage_count || 0) + ' 次</span>' +
-        '<span>成功率 ' + Math.round((s.success_rate != null ? s.success_rate : 1) * 100) + '%</span>' +
-        (updated ? '<span>更新 ' + updated + '</span>' : '') +
+        '<span>Call ' + (s.usage_count || 0) + ' times</span>' +
+        '<span>Success rate ' + Math.round((s.success_rate != null ? s.success_rate : 1) * 100) + '%</span>' +
+        (updated ? '<span>Update ' + updated + '</span>' : '') +
       '</div>' +
       (tools ? '<div class="gp-tool-tags">' + tools + '</div>' : '') +
     '</div>';
@@ -4724,7 +4806,7 @@ function renderSkillEvolution(skills) {
   const dates = Object.keys(timeline);
   if (dates.length) {
     html += '<div class="gp-skill-card" style="padding-bottom:8px">' +
-      '<div class="gp-timeline-title">技能时间线</div>' +
+      '<div class="gp-timeline-title">Skill timeline</div>' +
       '<div class="gp-timeline">';
     for (const date of dates) {
       html += '<div class="gp-timeline-group">' +

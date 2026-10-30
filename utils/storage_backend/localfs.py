@@ -13,8 +13,10 @@ that actually need CAS (history_save, memory_update).
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import shutil
+import tempfile
 from pathlib import Path
 
 from configs.settings import WORKSPACE_ROOT
@@ -64,20 +66,30 @@ class LocalFSBackend:
 
     def _write_bytes_sync(self, key: str, data: bytes, if_match: str | None) -> str:
         p = self._resolve(key)
-        if if_match is not None:
-            try:
-                cur = _md5_hex(p.read_bytes())
-                if if_match == IF_MATCH_ABSENT:
-                    raise ETagMismatchError(key, IF_MATCH_ABSENT, cur)
-                if cur != if_match:
+        # Stable locks outside the data tree work across backend instances and
+        # processes, and never appear in workspace listings or snapshots.
+        locks = self.root.parent / f".{self.root.name}.locks"
+        locks.mkdir(parents=True, exist_ok=True)
+        lock_name = hashlib.sha256(str(p).encode()).hexdigest()
+        with (locks / lock_name).open("a+b") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if if_match is not None:
+                try:
+                    cur = _md5_hex(p.read_bytes())
+                except FileNotFoundError:
+                    cur = None
+                expected = None if if_match == IF_MATCH_ABSENT else if_match
+                if cur != expected:
                     raise ETagMismatchError(key, if_match, cur)
-            except FileNotFoundError:
-                if if_match != IF_MATCH_ABSENT:
-                    raise ETagMismatchError(key, if_match, None) from None
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_bytes(data)
-        tmp.replace(p)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(prefix=".evoagent-write-", dir=p.parent, delete=False) as f:
+                tmp = Path(f.name)
+                try:
+                    f.write(data)
+                    f.close()
+                    tmp.replace(p)
+                finally:
+                    tmp.unlink(missing_ok=True)
         return _md5_hex(data)
 
     def _list_keys_sync(self, prefix: str) -> list[str]:
@@ -99,7 +111,7 @@ class LocalFSBackend:
             return []
         results: list[str] = []
         for f in walk_root_resolved.rglob("*"):
-            if not f.is_file():
+            if not f.is_file() or f.name.startswith(".evoagent-write-"):
                 continue
             rel = f.relative_to(self.root).as_posix()
             if rel.startswith(prefix):
@@ -146,6 +158,10 @@ class LocalFSBackend:
 
     def read_text_sync(self, key: str) -> str:
         return self._read_bytes_sync(key).decode("utf-8")
+
+    def read_text_with_etag_sync(self, key: str) -> tuple[str, str]:
+        data = self._read_bytes_sync(key)
+        return data.decode("utf-8"), _md5_hex(data)
 
     def write_bytes_sync(self, key: str, data: bytes, *, if_match: str | None = None) -> str:
         return self._write_bytes_sync(key, data, if_match)

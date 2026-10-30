@@ -14,21 +14,21 @@ from core.agent_compat import BaseTool
 
 
 class OptionItem(BaseModel):
-    label: str = Field(description="选项标题")
-    description: str | None = Field(default=None, description="选项说明")
+    label: str = Field(description="Option label")
+    description: str | None = Field(default=None, description="Option description")
 
 
 class AskUserQuestionParams(BaseModel):
-    question: str = Field(description="要问用户的问题")
-    options: list[OptionItem] = Field(description="选项列表，每项包含 label 和可选的 description")
+    question: str = Field(description="Question for the user")
+    options: list[OptionItem] = Field(description="Options with a label and optional description")
 
 
 class AskUserQuestionTool(BaseTool):
     name: str = "ask_user_question"
     description: str = (
-        "向用户展示选项卡片，等待用户选择。\n"
-        "用于任务执行中需要用户做选择才能继续的场景。\n"
-        "调用后本轮结束，等待用户选择后再继续。"
+        "Present option cards and wait for the user to choose.\n"
+        "Use when a user choice is needed to continue.\n"
+        "The current turn ends after the call; resume when the user responds."
     )
     param_anno = AskUserQuestionParams
 

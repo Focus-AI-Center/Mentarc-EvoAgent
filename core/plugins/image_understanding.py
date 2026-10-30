@@ -24,7 +24,7 @@ from utils.logger import logger
 class ImageUnderstandingParams(BaseModel):
     url: str = Field(description="Image URL to analyze")
     question: str = Field(
-        default="请详细描述这张图片的内容。",
+        default="Describe the contents of this image in detail.",
         description="Specific question about the image (default: general description)",
     )
 
@@ -61,7 +61,7 @@ class ImageUnderstandingTool(BaseTool):
                 resp.raise_for_status()
         except Exception as e:
             logger.error(f"Image download failed: {e}")
-            return f"图片下载失败: {str(e)}"
+            return f"Image download failed: {str(e)}"
 
         content_type = resp.headers.get("content-type", "image/png")
         mime = content_type.split(";")[0].strip()
@@ -98,7 +98,7 @@ class ImageUnderstandingTool(BaseTool):
             content = result.choices[0].message.content
             if content:
                 return content
-            return "无法获取图片描述。"
+            return "Could not obtain an image description."
         except Exception as e:
             logger.error(f"Vision model call failed: {e}")
-            return f"图片分析失败: {str(e)}"
+            return f"Image analysis failed: {str(e)}"

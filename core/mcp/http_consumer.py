@@ -52,18 +52,22 @@ class HTTPMCPConsumer:
             raise RuntimeError("mcp Python SDK is not installed") from exc
 
         stack = AsyncExitStack()
-        if self.server.transport == "sse":
-            read, write = await stack.enter_async_context(
-                sse_client(self.server.url, headers=self.server.headers or None)
-            )
-        else:
-            streams = await stack.enter_async_context(
-                streamablehttp_client(self.server.url, headers=self.server.headers or None)
-            )
-            read, write = streams[0], streams[1]
-        session = await stack.enter_async_context(ClientSession(read, write))
-        await session.initialize()
-        return stack, session
+        try:
+            if self.server.transport == "sse":
+                read, write = await stack.enter_async_context(
+                    sse_client(self.server.url, headers=self.server.headers or None)
+                )
+            else:
+                streams = await stack.enter_async_context(
+                    streamablehttp_client(self.server.url, headers=self.server.headers or None)
+                )
+                read, write = streams[0], streams[1]
+            session = await stack.enter_async_context(ClientSession(read, write))
+            await session.initialize()
+            return stack, session
+        except BaseException:
+            await stack.aclose()
+            raise
 
     async def list_tools(self) -> list[dict]:
         try:
@@ -74,7 +78,7 @@ class HTTPMCPConsumer:
                     return [_tool_to_jsonable(t) for t in getattr(result, "tools", [])]
         except Exception as exc:
             logger.warning(f"[mcp-http] list_tools failed server={self.server.name}: {exc}")
-            return []
+            raise
 
     async def call_tool(self, tool: str, args: dict | None, timeout: float = 60.0) -> dict:
         try:

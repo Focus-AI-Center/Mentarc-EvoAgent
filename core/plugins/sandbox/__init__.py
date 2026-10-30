@@ -56,8 +56,9 @@ class SandboxStartupError(SandboxError):
 class SandboxBackend(Protocol):
     """Async sandbox runner.
 
-    Implementations must be safe to call concurrently from different
-    coroutines (each invocation gets its own sandbox).
+    Implementations accept concurrent calls. The session Docker backend shares
+    a container for the same user/session key; it does not isolate each call
+    into a fresh container.
     """
 
     async def run(

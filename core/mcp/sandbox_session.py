@@ -1,8 +1,9 @@
 """Session-scoped stdio MCP runtime inside the MinIO Docker sandbox.
 
-This module intentionally does not use the one-shot ``execute_code`` backend:
-MCP stdio is a long-lived JSON-RPC session, so we keep one sandbox container
-per ``(user_id, session_id, server_name)`` and recycle it after idle TTL.
+MCP stdio keeps a long-lived JSON-RPC process/socket per
+``(user_id, session_id, server_name)``. These processes and ``execute_code``
+share the Docker container owned by ``(user_id, session_id)``; idle cleanup
+of an MCP connection is separate from cleanup of the shared container.
 """
 
 from __future__ import annotations

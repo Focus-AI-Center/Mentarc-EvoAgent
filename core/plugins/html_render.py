@@ -20,10 +20,10 @@ from utils.workspace import Workspace
 class HtmlRenderParams(BaseModel):
     title: str = Field(
         default="Preview",
-        description="预览面板标题，如 '销售趋势图'、'产品对比表'",
+        description="Preview title, such as 'Sales trends' or 'Product comparison'",
     )
     html: str = Field(
-        description="完整的 HTML 内容（可包含 <style>、<script>、CDN 引用等）",
+        description="Complete HTML, including optional styles, scripts and CDN resources",
     )
 
 
@@ -40,12 +40,12 @@ class HtmlRenderParams(BaseModel):
 class HtmlRenderTool(BaseTool):
     name: str = "html_render"
     description: str = (
-        "在前端预览面板中渲染 HTML 页面。适用于：\n"
-        "- 数据可视化（图表、仪表盘）\n"
-        "- 交互式内容（表单、计算器）\n"
-        "- 富文本报告（带样式的 HTML 页面）\n"
-        "- 产品展示页、对比表等\n"
-        "传入完整 HTML（可含 <style>、<script>、CDN 引用如 Chart.js/ECharts/Tailwind）。"
+        "Render an HTML page in the preview panel. Suitable for:\n"
+        "- Data visualizations such as charts and dashboards\n"
+        "- Interactive content such as forms and calculators\n"
+        "- Styled HTML reports\n"
+        "- Product pages and comparison tables\n"
+        "Provide complete HTML; styles, scripts and CDN libraries such as Chart.js, ECharts or Tailwind are supported."
     )
     param_anno = HtmlRenderParams
 
@@ -59,7 +59,7 @@ class HtmlRenderTool(BaseTool):
         title = params.title.strip() or "Preview"
 
         if not html:
-            return "请提供要渲染的 HTML 内容。"
+            return "Provide HTML content to render."
 
         # Wrap in full HTML document if not already
         if "<html" not in html.lower() and "<body" not in html.lower():
@@ -88,7 +88,7 @@ class HtmlRenderTool(BaseTool):
                 )
             except Exception as e:
                 logger.error(f"html_render: failed to save preview: {e}")
-                return f"HTML 预览保存失败: {e}"
+                return f"HTML preview save failed: {e}"
         else:
             logger.warning("html_render: no user_id, preview not persisted")
 

@@ -84,23 +84,23 @@ def _validate_cwd(cwd: str | None) -> tuple[str, str | None]:
     if not cwd:
         return "", None
     if cwd.startswith("/") or cwd.startswith("\\"):
-        return "", "cwd 必须是 workspace 下的相对路径（不能以 / 开头）"
+        return "", "cwd must be relative to the workspace (no leading /)"
     parts = [p for p in re.split(r"[\\/]+", cwd) if p not in ("", ".")]
     if any(p == ".." for p in parts):
-        return "", "cwd 不能包含 .. （禁止跳出 workspace）"
+        return "", "cwd cannot contain .. or escape the workspace"
     return "/".join(parts), None
 
 
 class ExecuteCodeParams(BaseModel):
-    code: str = Field(description="要执行的代码（bash 命令或 Python 代码）")
-    language: str = Field(default="bash", description="执行语言: bash 或 python（默认 bash）")
+    code: str = Field(description="Code to execute: bash commands or Python")
+    language: str = Field(default="bash", description="Execution language: bash or python (default bash)")
     cwd: str | None = Field(
         default=None,
-        description="（可选）用户 workspace 下的子目录；留空则在 workspace 根目录执行",
+        description="Optional workspace-relative subdirectory; defaults to the workspace root",
     )
     timeout: int = Field(
         default=_DEFAULT_TIMEOUT,
-        description=f"超时秒数（默认 {_DEFAULT_TIMEOUT}，最大 {_MAX_TIMEOUT}）",
+        description=f"Timeout in seconds (default {_DEFAULT_TIMEOUT}, maximum {_MAX_TIMEOUT})",
     )
 
 
@@ -111,18 +111,18 @@ class ExecuteCodeParams(BaseModel):
         capabilities=["command-execution", "python-execution"],
         input_types=["text"],
         output_types=["json"],
-        description="在用户 workspace 目录内执行 bash 或 Python 代码",
+        description="Execute bash or Python in the user workspace",
     )
 )
 class ExecuteCodeTool(BaseTool):
     name: str = "execute_code"
     description: str = (
-        "在当前用户的 workspace 目录内执行 bash 命令或 Python 代码并返回 stdout/stderr。"
-        "适合的场景：运行脚本、查看/创建文件、跑数据处理、验证结果、安装 pip 包等。\n"
-        "- language: 'bash'（默认）或 'python'\n"
-        "- cwd: 可选的 workspace 内子目录，不填则在 workspace 根目录\n"
-        "- timeout: 秒，默认 30，上限 120；输出超过 10000 字符会被截断\n"
-        "不会执行 workspace 之外的路径，拒绝明显的危险命令（rm -rf /、mkfs、shutdown、fork bomb 等）。"
+        "Run bash or Python inside the current user workspace and return stdout/stderr. "
+        "Use for scripts, file operations, data processing, validation and installing packages.\n"
+        "- language: 'bash' (default) or 'python'\n"
+        "- cwd: Optional subdirectory within the workspace; defaults to its root\n"
+        "- timeout: Seconds, default 30, maximum 120; output above 10000 characters is truncated\n"
+        "Paths must stay within the workspace. Obvious destructive commands such as rm -rf /, mkfs, shutdown and fork bombs are rejected."
     )
     param_anno = ExecuteCodeParams
 
@@ -134,7 +134,7 @@ class ExecuteCodeTool(BaseTool):
     async def __call__(self, params: ExecuteCodeParams) -> str:
         code = (params.code or "").strip()
         if not code:
-            return json.dumps({"success": False, "error": "code 不能为空"}, ensure_ascii=False)
+            return json.dumps({"success": False, "error": "code must not be empty"}, ensure_ascii=False)
 
         lang = (params.language or "bash").lower()
         if lang in ("sh", "shell"):
@@ -143,7 +143,7 @@ class ExecuteCodeTool(BaseTool):
             return json.dumps(
                 {
                     "success": False,
-                    "error": f"不支持的 language: {lang}（仅支持 bash / python）",
+                    "error": f"Unsupported language: {lang} (use bash or python)",
                 },
                 ensure_ascii=False,
             )
@@ -156,7 +156,7 @@ class ExecuteCodeTool(BaseTool):
                 return json.dumps(
                     {
                         "success": False,
-                        "error": f"拒绝执行：命中危险模式 {pat!r}",
+                        "error": f"Execution rejected: blocked command pattern {pat!r}",
                     },
                     ensure_ascii=False,
                 )
@@ -208,7 +208,7 @@ class ExecuteCodeTool(BaseTool):
             return json.dumps(
                 {
                     "success": False,
-                    "error": f"执行超时（>{timeout}s）",
+                    "error": f"Execution timed out (>{timeout}s)",
                     "sandbox": result.sandbox_label,
                     "stdout": stdout,
                 },
@@ -226,5 +226,5 @@ class ExecuteCodeTool(BaseTool):
             "duration_ms": result.duration_ms,
         }
         if truncated:
-            payload["note"] = f"输出超过 {_MAX_OUTPUT_CHARS} 字符，已截断"
+            payload["note"] = f"Output exceeded {_MAX_OUTPUT_CHARS} characters and was truncated"
         return json.dumps(payload, ensure_ascii=False)

@@ -50,9 +50,9 @@ class WebSearchTool(BaseTool):
                 f"**{r.get('title', '')}**\n{r.get('url', '')}\n{r.get('content', '')[:500]}" for r in results
             )
             meta = (
-                f"\n\n---\n**[数据元信息]** 来源: Tavily | "
-                f"查询时间: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')} | "
-                f"结果数: {len(results)} | 查询词: {params.query}"
+                f"\n\n---\n**[Result metadata]** Source: Tavily | "
+                f"Query time: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')} | "
+                f"Result count: {len(results)} | Query: {params.query}"
             )
             return body + meta
         except Exception as e:

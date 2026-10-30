@@ -143,18 +143,18 @@ async def upload_images(user_id: str, files: list[UploadFile] = File(...)):
 
     for file in files:
         if file.content_type not in ALLOWED_IMAGE_TYPES:
-            raise HTTPException(400, f"不支持的图片格式: {file.content_type}，支持: png/jpg/webp")
+            raise HTTPException(400, f"Unsupported image format: {file.content_type},Supported: png/jpg/webp")
 
         data = await file.read()
         if len(data) > MAX_IMAGE_SIZE:
-            raise HTTPException(400, f"图片过大: {file.filename}（上限20MB）")
+            raise HTTPException(400, f"Image is too large: {file.filename}(limit20MB)")
 
         try:
             b64_data = base64.b64encode(data).decode("utf-8")
             file_url, file_name = upload_image(b64_data, file.content_type)
             ws.image_write(file_name, data)
         except Exception as e:
-            raise HTTPException(500, f"图片上传失败: {file.filename} — {e}") from e
+            raise HTTPException(500, f"Image upload failed: {file.filename} — {e}") from e
 
         results.append(
             {
@@ -229,7 +229,7 @@ async def sync_builtin_skills(user_id: str):
         "status": "ok",
         "added": result["added"],
         "updated": result["updated"],
-        "message": f"技能同步完成：新增 {result['added']} 个，更新 {result['updated']} 个",
+        "message": f"Skill synchronization completed:Added {result['added']} items,Update {result['updated']} items",
     }
 
 
@@ -254,7 +254,7 @@ async def clear_workspace(user_id: str, request: ClearRequest):
         HTTPException 400: If confirm is not true
     """
     if not request.confirm:
-        raise HTTPException(status_code=400, detail="必须设置 confirm=true 才能清空数据")
+        raise HTTPException(status_code=400, detail="You must set confirm=true to clear workspace data")
 
     ws = Workspace(user_id)
 
@@ -265,7 +265,7 @@ async def clear_workspace(user_id: str, request: ClearRequest):
             "status": "ok",
             "action": "reset_to_defaults",
             "cleared": cleared,
-            "message": "工作空间已重置到初始状态，默认技能已恢复",
+            "message": "Workspace reset to defaults,Default skills restored",
         }
     else:
         # Partial clear: only clear user data, keep prompts
@@ -274,7 +274,7 @@ async def clear_workspace(user_id: str, request: ClearRequest):
             "status": "ok",
             "action": "clear_all",
             "cleared": cleared,
-            "message": "用户数据已清空（对话历史、已确认技能），prompts 保留",
+            "message": "User data cleared(conversation history,Confirmed skills),prompts preserved",
         }
 
 

@@ -66,15 +66,15 @@ def _save_users(users: dict) -> None:
 async def register(req: AuthRequest):
     username = req.username.strip()
     if not username or len(username) < 2:
-        raise HTTPException(400, "用户名至少 2 个字符 / Username must be at least 2 characters")
+        raise HTTPException(400, "Username must be at least 2 characters")
     if len(username) > 30:
-        raise HTTPException(400, "用户名不能超过 30 个字符 / Username must be at most 30 characters")
+        raise HTTPException(400, "Username must be at most 30 characters")
     if not req.password or len(req.password) < 3:
-        raise HTTPException(400, "密码至少 3 个字符 / Password must be at least 3 characters")
+        raise HTTPException(400, "Password must be at least 3 characters")
 
     users = _load_users()
     if username in users:
-        raise HTTPException(400, "用户名已存在 / Username already exists")
+        raise HTTPException(400, "Username already exists")
 
     users[username] = {
         "password_hash": _hash_password(req.password),
@@ -88,11 +88,11 @@ async def register(req: AuthRequest):
 async def login(req: AuthRequest):
     username = req.username.strip()
     if not username or not req.password:
-        raise HTTPException(400, "请输入用户名和密码 / Username and password required")
+        raise HTTPException(400, "Username and password required")
 
     users = _load_users()
     user = users.get(username)
     if not user or user["password_hash"] != _hash_password(req.password):
-        raise HTTPException(401, "用户名或密码错误 / Invalid username or password")
+        raise HTTPException(401, "Invalid username or password")
 
     return {"status": "ok", "username": username}

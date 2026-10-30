@@ -28,9 +28,9 @@ _RATIO_TO_SIZE = {
 
 
 class ImageEditingParams(BaseModel):
-    prompt: str = Field(description="编辑指令（英文，描述要如何修改图片）")
-    image_urls: list[str] = Field(description="要编辑的图片 URL 列表（支持 http/https URL）")
-    aspect_ratio: str = Field(default="1:1", description="输出宽高比")
+    prompt: str = Field(description="English editing instructions describing the desired changes")
+    image_urls: list[str] = Field(description="Image URLs to edit (http/https supported)")
+    aspect_ratio: str = Field(default="1:1", description="Output aspect ratio")
 
 
 @register_plugin(
@@ -45,7 +45,9 @@ class ImageEditingParams(BaseModel):
 )
 class ImageEditingTool(BaseTool):
     name: str = "image_editing"
-    description: str = "根据文本指令编辑图片，支持风格转换、图片增强、多图合成等。"
+    description: str = (
+        "Edit images using text instructions, including style transfer, enhancement and compositing."
+    )
     param_anno = ImageEditingParams
     user_id: str = ""
 
@@ -107,7 +109,7 @@ class ImageEditingTool(BaseTool):
                         "image_path": img_url,
                         "original_urls": params.image_urls,
                         "prompt": params.prompt,
-                        "markdown": f"![编辑图片]({img_url})",
+                        "markdown": f"![Edited image]({img_url})",
                     },
                     ensure_ascii=False,
                 )

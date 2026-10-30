@@ -27,7 +27,7 @@ class SandboxStdioMCPConsumer:
             return await session.list_tools()
         except Exception as exc:
             logger.warning(f"[mcp-sandbox] list_tools failed server={self.server.name}: {exc}")
-            return []
+            raise
 
     async def call_tool(self, tool: str, args: dict | None, timeout: float = 60.0) -> dict:
         try:

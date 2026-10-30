@@ -20,16 +20,16 @@ from pathlib import Path
 from core.agent import EvoAgent
 
 PROMPTS = [
-    "帮我整理一下目前的客户清单",
-    "写一封询盘回复邮件，重点说明交付周期",
-    "给这个产品写 3 个卖点",
-    "把上一轮的卖点翻译成英文",
-    "列出下周需要跟进的事项",
-    "帮我分析一下这个市场近期的趋势",
-    "写一封跟进邮件，语气专业一些",
-    "给一个报价建议，考虑运费和关税",
-    "复盘本周的客户沟通情况",
-    "整理 FAQ 的前 5 个问题",
+    "Organize the current customer list",
+    "Draft an inquiry reply emphasizing delivery time",
+    "Write three selling points for this product",
+    "Rewrite those selling points for an English-speaking audience",
+    "List the follow-up actions for next week",
+    "Analyze recent trends in this market",
+    "Write a professional follow-up email",
+    "Suggest a quote that accounts for shipping and tariffs",
+    "Review this week's customer communications",
+    "Organize the top five FAQ questions",
 ]
 
 

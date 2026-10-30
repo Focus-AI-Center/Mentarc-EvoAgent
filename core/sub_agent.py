@@ -32,11 +32,14 @@ from configs.settings import (
     PROXY_SERVER,
 )
 from core.agent_compat import convert_tools
+from core.mcp import MCPToolManager
 from core.plugins import initialize_plugins
 from core.plugins.ask_user import AskUserQuestionTool
-from core.plugins.internal import SkillManagerTool, UpdateMemoryTool, UpdateUserProfileTool
+from core.plugins.internal import MemoryTool, SkillTool, UpdateUserProfileTool
 from core.plugins.todo_manager import TodoManagerTool
 from core.skills.manager import SkillManager
+from core.tool_search import configure_agent_tools
+from utils.context_assets import memory_index_context, skill_location_context
 from utils.history_compressor import HistoryCompressor
 from utils.logger import logger
 from utils.workspace import Workspace
@@ -222,18 +225,18 @@ class SubAgentRunner:
         user_raw = await ws_call(self.workspace, "read_prompt", "USER")
         user_body = _prompt_body(user_raw) if user_raw else ""
         if user_body:
-            prompt += f"\n\n## 用户信息\n{user_body}"
+            prompt += f"\n\n## User information\n{user_body}"
 
         memory_raw = await ws_call(self.workspace, "read_prompt", "MEMORY")
         memory_body = _prompt_body(memory_raw) if memory_raw else ""
         if memory_body:
-            prompt += f"\n\n## 记忆\n{memory_body}"
+            prompt += f"\n\n## Memory\n{memory_index_context(memory_body)}"
 
         if context:
-            prompt += f"\n\n## 任务上下文\n{context}"
+            prompt += f"\n\n## Task context\n{context}"
 
         now = datetime.now(UTC)
-        prompt += f"\n\n当前时间：{now.strftime('%Y-%m-%d %H:%M UTC')}"
+        prompt += f"\n\nCurrent time:{now.strftime('%Y-%m-%d %H:%M UTC')}"
 
         return prompt
 
@@ -242,7 +245,7 @@ class SubAgentRunner:
         tools = initialize_plugins(plugin_names, user_id=self.user_id, workspace=self.workspace)
 
         tools.append(
-            SkillManagerTool(
+            SkillTool(
                 user_id=self.user_id,
                 skill_manager=self.skill_manager,
                 workspace=self.workspace,
@@ -251,7 +254,7 @@ class SubAgentRunner:
         )
         tools.append(TodoManagerTool())
         tools.append(UpdateUserProfileTool(user_id=self.user_id, workspace=self.workspace))
-        tools.append(UpdateMemoryTool(user_id=self.user_id, workspace=self.workspace))
+        tools.append(MemoryTool(user_id=self.user_id, workspace=self.workspace))
         tools.append(AskUserQuestionTool())
 
         # Parent-history tool: only available when this sub-agent was
@@ -279,13 +282,16 @@ class SubAgentRunner:
                 logger.warning(f"Sub-agent skill '{skill_name}' not found")
                 continue
 
-            content = f"技能文档 `{skill.name}/SKILL.md`:\n\n```markdown\n{skill.instructions}\n```"
+            content = f"Skill document `{skill.name}/SKILL.md`:\n\n```markdown\n{skill.instructions}\n```"
+            content += f"\n\n{skill_location_context(skill.name)}"
             if skill.required_tools:
-                content += f"\n\n所需工具: {', '.join(skill.required_tools)}"
+                content += f"\n\nRequired tools: {', '.join(skill.required_tools)}"
             if skill.references:
-                content += f"\n\n可用支撑文件 ({len(skill.references)}):"
+                content += f"\n\nAvailable references ({len(skill.references)}):"
                 for fn in skill.references:
-                    content += f"\n- `{fn}` → skill_manager(action='get_ref', name='{skill.name}', ref_filename='{fn}')"
+                    content += (
+                        f"\n- `{fn}` → skill(action='get_ref', name='{skill.name}', ref_filename='{fn}')"
+                    )
 
             synthetic_id = f"skill_autoload_{skill.name}"
             history.extend(
@@ -298,7 +304,7 @@ class SubAgentRunner:
                                 "id": synthetic_id,
                                 "type": "function",
                                 "function": {
-                                    "name": "skill_manager",
+                                    "name": "skill",
                                     "arguments": json.dumps({"action": "get", "name": skill.name}),
                                 },
                             }
@@ -307,14 +313,14 @@ class SubAgentRunner:
                     {
                         "role": "tool",
                         "content": content,
-                        "name": "skill_manager",
+                        "name": "skill",
                         "tool_call_id": synthetic_id,
                     },
                 ]
             )
             logger.info(f"Sub-agent auto-loaded skill: {skill.name}")
 
-    _COMPLETION_MARKERS = ["评估小结", "Subject:", "collapsible", "report_preview"]
+    _COMPLETION_MARKERS = ["Assessment summary", "Subject:", "collapsible", "report_preview"]
 
     async def _check_completion(self, final_text: str) -> bool:
         """Use LLM to judge if the sub-agent has completed its task."""
@@ -340,10 +346,10 @@ class SubAgentRunner:
                         {
                             "role": "system",
                             "content": (
-                                "判断以下 AI 助手输出是否已经完成了用户的任务。\n"
-                                "完成的标志：给出了实质性回答（报告、邮件、分析、步骤等）。\n"
-                                "未完成的标志：只是在引导用户提供更多信息、等待用户输入。\n"
-                                "只回答一个字：是 或 否"
+                                "Determine whether this assistant output completes the user task.\n"
+                                "Complete: a substantive answer such as a report, email, analysis or procedure.\n"
+                                "Incomplete: only asking for more information or waiting for user input.\n"
+                                "Answer only yes or no."
                             ),
                         },
                         {"role": "user", "content": tail},
@@ -354,7 +360,7 @@ class SubAgentRunner:
                 timeout=5.0,
             )
             answer = (resp.choices[0].message.content or "").strip()
-            completed = "是" in answer
+            completed = answer.casefold().strip(".! ") == "yes"
             logger.info(f"Completion check ({self.config.name}): answer='{answer}' completed={completed}")
             return completed
         except Exception as e:
@@ -407,6 +413,15 @@ class SubAgentRunner:
             model_settings=ModelSettings(temperature=0.5, max_tokens=16000),
             tool_use_behavior="run_llm_again",
         )
+        await configure_agent_tools(
+            agent,
+            loader=MCPToolManager(
+                user_id=self.user_id,
+                session_id=self.session_id,
+                workspace=self.workspace,
+            ).create_tools,
+            initially_loaded=self.config.required_tools,
+        )
 
         # Add user message to history before running
         history.append({"role": "user", "content": user_input})
@@ -430,10 +445,10 @@ class SubAgentRunner:
                         self._final_text += event.get("content", "")
         except TimeoutError:
             logger.warning(f"Sub-agent {self.config.name} timed out")
-            yield {"code": 2, "content": f"\n\n[子代理超时（{self.config.timeout}秒）]"}
+            yield {"code": 2, "content": f"\n\n[Sub-agent timed out({self.config.timeout}s)]"}
         except Exception as e:
             logger.error(f"Sub-agent {self.config.name} error: {e}", exc_info=True)
-            yield {"code": 2, "content": f"\n\n[子代理出错: {e}]"}
+            yield {"code": 2, "content": f"\n\n[Sub-agent error: {e}]"}
 
         # 7. Detect needs_followup via LLM (fallback to markers)
         self.needs_followup = not await self._check_completion(self._final_text)

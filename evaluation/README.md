@@ -25,10 +25,10 @@ evaluation/
   "user_id": "test_user_fc",
   "session_id": "sess_001",
   "turns": [
-    {"role": "user", "content": "客户发了询盘..."},
+    {"role": "user", "content": "A customer sent an inquiry..."},
     {"role": "assistant", "content": "..."}      // reference (optional)
   ],
-  "query": "帮我写一封首次回复邮件",              // final turn to evaluate
+  "query": "Draft an initial reply email",              // final turn to evaluate
   "intent": "inquiry_response",                  // for grouping analysis
   "tags": ["email", "first_contact"]
 }

@@ -13,7 +13,7 @@ from utils.workspace import Workspace
 
 router = APIRouter()
 
-# Reverse mapping: Chinese field name → English param name
+# Reverse mapping: profile field label -> tool parameter.
 _FIELD_TO_PARAM = {v: k for k, v in _PARAM_TO_FIELD.items()}
 
 
@@ -50,30 +50,30 @@ async def get_profile(request: ProfileGetRequest):
     body = _FRONTMATTER_RE.sub("", raw, count=1).strip() if raw else ""
     fields = _parse_user_fields(body)
 
-    # Convert Chinese field names → English param names
+    # Convert profile labels to public API parameter names.
     result = {}
-    for cn_name, value in fields.items():
-        eng_name = _FIELD_TO_PARAM.get(cn_name)
-        if eng_name:
-            result[eng_name] = value
+    for label, value in fields.items():
+        parameter = _FIELD_TO_PARAM.get(label)
+        if parameter:
+            result[parameter] = value
     return {"success": True, "data": result}
 
 
 @router.put("/profile")
 async def update_profile(request: ProfileUpdateRequest):
     """Update user profile fields (only provided fields are updated)."""
-    # Map English params → Chinese field names, skip None
+    # Map tool parameters to profile labels, skipping omitted values.
     updates = {}
-    for eng, cn in _PARAM_TO_FIELD.items():
-        val = getattr(request, eng, None)
+    for parameter, label in _PARAM_TO_FIELD.items():
+        val = getattr(request, parameter, None)
         if val is not None:
-            updates[cn] = val
+            updates[label] = val
 
     if not updates:
         return {"success": True, "updated": []}
 
-    updated = _append_user_profile_fields(request.user_id, updates, multi_field_append=True)
+    updated = await _append_user_profile_fields(request.user_id, updates, multi_field_append=True)
     return {
         "success": True,
-        "updated": [_FIELD_TO_PARAM.get(cn, cn) for cn in updated],
+        "updated": [_FIELD_TO_PARAM.get(label, label) for label in updated],
     }

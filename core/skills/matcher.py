@@ -123,7 +123,7 @@ class SkillMatcher:
     async def _llm_match(self, user_input: str, skills: dict[str, Skill]) -> SkillMatchResult:
         """Stage 3: LLM-based intent matching (fallback)."""
         skills_desc = "\n".join(
-            f"- **{s.name}**: {s.description} (触发词: {', '.join(s.triggers)})" for s in skills.values()
+            f"- **{s.name}**: {s.description} (Triggers: {', '.join(s.triggers)})" for s in skills.values()
         )
 
         prompt = prompts.render(
@@ -136,7 +136,10 @@ class SkillMatcher:
             response = await self._llm_client.chat.completions.create(
                 model=COMPRESSION_MODEL,
                 messages=[
-                    {"role": "system", "content": "只输出技能名称或 null，不要其他内容。"},
+                    {
+                        "role": "system",
+                        "content": "Return only the exact skill name or null, with no other content.",
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,

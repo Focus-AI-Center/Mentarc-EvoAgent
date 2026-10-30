@@ -5,6 +5,12 @@
 
 Official implementation of **"EvoAgent: An Evolvable Agent Framework with Skill Learning and Multi-Agent Delegation"** ([arXiv:2604.20133](https://arxiv.org/abs/2604.20133)).
 
+EvoAgent also provides a **Cloud Agent** architecture: the API process runs the
+Agent, MinIO holds durable user workspaces, and a reusable session sandbox runs
+code when needed. Skill and memory tools access storage directly; reading a
+reference does not require an extra sandbox invocation. See
+[Cloud Agent architecture and sandbox runtime](docs/cloud-agent.md).
+
 [Reproducibility](REPRODUCIBILITY.md) · [Citation](#citation) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
 > **⚠️ Pre-release preview.** The paper is available on [arXiv:2604.20133](https://arxiv.org/abs/2604.20133); the detailed paper-to-code mapping will be attached in the upcoming official release. Author list in `CITATION.cff` is final.
@@ -26,14 +32,12 @@ Official implementation of **"EvoAgent: An Evolvable Agent Framework with Skill 
 >   timeout are the only barriers. Use this mode for single-machine research
 >   / paper reproduction only.
 >
-> - **MINIO mode** (set `MINIO_ENDPOINT`). Workspace data lives in a MinIO
->   bucket; `execute_code` runs in a one-shot Docker container on a
->   *separate* sandbox host that mounts the bucket via s3fs (see
->   [`core/plugins/sandbox/remote_docker.py`](core/plugins/sandbox/remote_docker.py)).
->   Storage and the sandbox runtime are decoupled from the server process,
->   so the server can be restarted / scaled and a sandbox escape can only
->   reach that user's bucket prefix. This is the recommended path for any
->   deployment with persistence requirements or more than one trusted user.
+> - **MINIO mode** (set `MINIO_ENDPOINT`). Workspace data lives in MinIO;
+>   `execute_code` and stdio MCP share a Docker container per user/session,
+>   optionally on a separate host through `DOCKER_HOST`. The user workspace is
+>   mounted with s3fs at `/workspace`. Skill/reference operations use the server's
+>   storage SDK directly. Containers, credentials and network policy still have
+>   the deployment boundaries described in [SECURITY.md](SECURITY.md).
 >
 > Both modes still keep `execute_code` behind the same regex blacklist /
 > timeout / output truncation; the difference is **where** the code runs
@@ -44,7 +48,7 @@ Official implementation of **"EvoAgent: An Evolvable Agent Framework with Skill 
 
 ## Overview
 
-EvoAgent is an evolvable LLM-agent framework built around two coordinated loops:
+EvoAgent is an evolvable LLM-agent framework with a cloud workspace and an on-demand execution runtime, built around two coordinated loops:
 
 - An **online execution loop** that runs user turns through a three-stage skill match, injects matched skills into the ReAct context, and compresses long histories on the fly.
 - An **offline evolution loop** that reviews completed sessions, updates the user profile and long-term memory, extracts candidate new skills, and scores skill maturity.
@@ -69,13 +73,137 @@ The system runs two coordinated loops (Section 3 of the paper):
 
 ![Online Execution Loop](docs/figures/online-loop.svg)
 
-**Offline evolution loop** — triggered after a session completes, the `session-reviewer` sub-agent consumes the transcript and emits three parallel updates: user profile (`USER.md`), long-term memory (`MEMORY.md` index + 4 typed detail files), and skill evolution (candidate extraction + maturity scoring). All writes land in the same workspace and are picked up on the next online turn.
+**Offline evolution loop** — users can request a session review through the memory-update button (`SessionUpdater`) or ask the main agent to delegate to `session-reviewer`. Reviews can update the user profile (`USER.md`), long-term memory (`MEMORY.md` plus registered files or typed detail files), and skill suggestions. Ordinary session completion saves history and does not automatically start a review. All writes land in the same workspace and are picked up on the next online turn.
 
 ![Offline Evolution Loop](docs/figures/offline-loop.svg)
 
 The complete mapping between paper sections (methodology, appendix pseudocode) and source files will ship with the official release alongside the paper PDF.
 
+### Cloud workspace and direct reference access
+
+The workspace is durable Agent state, accessible independently of a running
+sandbox. In MINIO mode, `skill` and `memory` call `Workspace` and
+`MinIOSDKBackend` inside the API process. `execute_code` is the separate path
+for computation: Docker exec runs code against the s3fs-mounted workspace.
+
+```python
+# Read stored reference text directly; no shell or Docker exec is needed.
+skill(action="get_ref", name="buyer-lead-screening", ref_filename="rules.md")
+
+# Use the execution runtime when the task actually needs a script.
+execute_code(language="bash", code="python scripts/run.py",
+             cwd="skills/buyer-lead-screening")
+```
+
+A bash read would add container lookup or startup, Docker exec, a shell and the
+s3fs filesystem path to a simple storage operation. Direct MinIO reads and writes
+avoid those execution costs, so `get_ref`, `save` and `ref_set` are the intended
+fast path for skill documents. Warm sessions reuse their container, but an
+extra exec is still unnecessary for ordinary reference access. This is an
+architectural latency benefit, not a published benchmark.
+
+Read the [Cloud Agent guide](docs/cloud-agent.md) for object-key/path mapping,
+container lifecycle, shared stdio MCP processes, configuration and API-worker
+ownership. See [skill extraction](docs/skill-extraction.md) for reference bundles.
+
+### Memory index and skill directories
+
+See [Memory storage and lifecycle](docs/memory.md) for the complete storage formats, read/write
+flows, context limits, review triggers, backup behavior, and current limitations.
+
+Long-term memory is scoped to a user workspace and shared across that user's
+sessions. Files under `prompts/` have the following roles:
+
+| File | Contents |
+|---|---|
+| `USER.md` | Structured user profile, loaded into context each turn. |
+| `MEMORY.md` | Index: one line per memory, with type, title, date, and summary. |
+| `MEMORY_user.md` | All user-background memories in one file. |
+| `MEMORY_feedback.md` | All collaboration preferences and corrections in one file. |
+| `MEMORY_project.md` | All project decisions, deadlines, and other project context in one file. |
+| `MEMORY_reference.md` | All pointers to external information in one file. |
+
+The four `MEMORY_{type}.md` files are the compatible grouped storage format.
+You can also create independent UTF-8 memory files through `execute_code`, then
+register each file in the index with the **`memory`** tool:
+
+```python
+execute_code(
+    language="python",
+    code='from pathlib import Path; Path("memory").mkdir(exist_ok=True); '
+         'Path("memory/customer_acme.md").write_text("ACME purchasing preferences...", encoding="utf-8")',
+)
+memory(action="append", type="project", title="ACME customer background",
+       file_path="memory/customer_acme.md", summary="Purchasing preferences and relationship context")
+memory(action="get", title="ACME customer background")
+```
+
+The tool checks that the file exists and is nonempty, then adds only one index
+line; it does not change the file. `file_path` and index links are relative to
+the **user workspace root**, including when the index is under `prompts/`:
+
+```markdown
+- [project] [ACME customer background](memory/customer_acme.md) (2026-10-30) — Purchasing preferences
+```
+
+The `get` action resolves this link and reads the current file contents. Editing
+the file through code does not require registering it again. Duplicate paths or
+titles within the same type are not added again; missing files produce an error
+without changing the index. The four types remain metadata and do not limit the
+number of independent files. Workspace snapshots include registered memory files.
+
+Omitting `file_path` and passing `content` to `append` retains the grouped format:
+each detail file contains multiple entries separated by `## Title (YYYY-MM-DD)`
+headings. The main agent and sub-agents automatically load only the first
+**200 lines or 25KB (25,600 UTF-8 bytes)** of the index, whichever limit is reached
+first. These fixed limits are defined in `utils/context_assets.py`; they are
+independent of conversation-history compression settings.
+
+Loading never deletes persisted entries. At 90% of either limit, agents receive
+a maintenance reminder; above either limit, they are told that the remaining
+index content is not automatically loaded. Memory reads and writes also report
+index pressure. Use `memory(action="read")` to inspect the full index,
+`get` with a title to retrieve one detail entry (up to 8,000 characters), and
+`rewrite` with a type to merge or remove entries in that type's detail file.
+Rewriting rebuilds grouped entries from all four detail files while preserving
+registered file links; `rebuild_index` does the same and does not discover
+unregistered files. Keep grouped entry titles and first body lines concise
+because they become index titles and summaries. Update independent file bodies
+through `execute_code`.
+
+Longer memory bodies include the workspace-relative source path and a sandbox
+bash read example. Use `execute_code` with `cat` or `sed` for additional content;
+the memory tool does not expose pagination parameters. Code execution output
+has its own size limit, so use `sed` to select the relevant lines when needed.
+
+The skill management tool is named **`skill`**. Skill loading includes the skill's
+workspace-relative directory, such as
+`skills/your-skill/`, alongside its instructions. This applies to automatic
+loading in the main agent and sub-agents, and to `skill(action="get")`.
+Paths such as `scripts/` and `references/` in a skill are relative to that skill
+directory. To run an existing script, use:
+
+```python
+execute_code(code="python scripts/run.py", cwd="skills/your-skill")
+```
+
+The relative `cwd` works in both execution modes. The directory resolves to
+`{WORKSPACE_ROOT}/{user_id}/skills/your-skill/` locally and
+`/workspace/skills/your-skill/` in the Docker sandbox. Loading instructions does
+not execute a script; `execute_code` must be enabled to run one.
+
 ## Quick Start
+
+Skill extraction supports a concise `SKILL.md` plus reference files for long
+rules, templates, and examples. Users can inspect every file in the proposal
+card and confirm the bundle once. See [Skill extraction and reference files](docs/skill-extraction.md).
+
+Tool search is enabled by default for main agents and sub-agents. Resident
+internal tools are available immediately; enabled plugin and MCP tool schemas
+are loaded after `toolsearch(query="name or capability", limit=5)` finds them.
+MCP catalogs are fetched on the first search, or earlier for explicitly required
+or resident MCP tools. See
+[Tool search](docs/tool-search.md) for configuration, lifecycle, and examples.
 
 ```bash
 git clone https://github.com/Focus-AI-Center/Mentarc-EvoAgent
@@ -98,21 +226,28 @@ subprocess). For multi-user / persistent / hardened deployments, switch to
 
 ## Deployment Modes
 
-| | **LOCAL** (default) | **MINIO** (recommended for >1 user) |
+| | **LOCAL** (default) | **MINIO** (Cloud Agent workspace) |
 |---|---|---|
 | Trigger | `MINIO_ENDPOINT` empty | `MINIO_ENDPOINT` set |
 | Storage backend | `LocalFSBackend` (`data/workspace/{user_id}/`) | `MinIOSDKBackend` (S3 keys `{user_id}/...`) |
-| Sandbox backend | `LocalSubprocessBackend` (plain subprocess) | `RemoteDockerBackend` (one-shot container on a separate host) |
+| Sandbox backend | `LocalSubprocessBackend` (plain subprocess) | `SessionDockerBackend` (reused container per user/session) |
 | Workspace ↔ sandbox | direct file access on the same host | s3fs mount of the MinIO bucket inside the container |
-| Server can be restarted/scaled? | No (state on local disk) | Yes (state in MinIO) |
+| Durable state | Local disk; retain the workspace directory across restarts | MinIO objects, independent of API and execution containers |
+| Live runtime ownership | Local subprocesses | API-process-owned container/MCP registries; coordinate workers before scaling |
 | Cross-mode configs | rejected at startup (`make_sandbox_backend` / `get_backend`) | |
+
+The current factory selects session Docker execution. The legacy one-shot
+`RemoteDockerBackend` remains in the source but is not the default. See the
+[cloud runtime guide](docs/cloud-agent.md#session-sandbox-lifecycle) for lifecycle
+and [worker ownership](docs/cloud-agent.md#persistence-and-api-process-ownership)
+before adding API replicas.
 
 ### Deploy MinIO
 
-We do not bundle a MinIO deployment manifest. Use any release that supports
-versioning + STS — single-node `minio:latest` is enough for development;
-4-node distributed StatefulSet with EC:2 is recommended for production. See
-the [official MinIO docs](https://min.io/docs).
+We do not bundle a MinIO deployment manifest. Provide a reachable MinIO service
+and a bucket. The storage backend uses conditional PUT for concurrent memory
+updates, so the deployed service must support `If-Match` / `If-None-Match`.
+See the [cloud runtime guide](docs/cloud-agent.md) for the storage contract.
 
 Once it's up, create a bucket (default name in `.env.example`:
 `evoagent-workspaces`) and copy its endpoint URL + access/secret keys.
@@ -203,7 +338,7 @@ curl -s "${SERVER_BASE_URL%/}/health"
 # 2. Trigger an execute_code call and confirm the sandbox label is the docker one
 curl -N -H 'Content-Type: application/json' "${SERVER_BASE_URL%/}/api/agent/chat" \
   -d '{"userId":"smoke","sessionId":"s1","plugins":["execute_code"],
-       "data":{"input":"用 execute_code 运行 print(2+3)"}}' \
+       "data":{"input":"Run print(2+3) with execute_code"}}' \
   | grep -o '"sandbox": "[^"]*"' | head -1
 # "sandbox": "docker(evoagent-sandbox:python3.11,net=host)"
 ```
@@ -225,7 +360,8 @@ Mentarc-EvoAgent/
 │   │   ├── execute_code.py # Backend dispatcher (validation + sandbox.run)
 │   │   └── sandbox/        # Pluggable sandbox backends
 │   │       ├── local.py    # LocalSubprocessBackend (LOCAL mode)
-│   │       └── remote_docker.py  # RemoteDockerBackend (MINIO mode)
+│   │       ├── session_docker.py # SessionDockerBackend (MINIO mode)
+│   │       └── remote_docker.py  # Legacy one-shot backend
 │   └── skills/             # Three-stage skill matcher + skill manager
 ├── configs/
 │   ├── prompts/            # SOUL.md / USER.md / MEMORY.md templates
@@ -233,6 +369,7 @@ Mentarc-EvoAgent/
 │   └── agents/             # (Empty) drop-in sub-agent configs
 ├── utils/
 │   ├── workspace.py        # Per-user persistence (routes to backend below)
+│   ├── context_assets.py   # Memory index limits and skill directory guidance
 │   ├── storage_backend/    # Pluggable storage backends
 │   │   ├── localfs.py      # LocalFSBackend (LOCAL mode)
 │   │   └── minio_sdk.py    # MinIOSDKBackend (MINIO mode)
@@ -283,7 +420,14 @@ No. Only `OPENAI_API_KEY` is required. The others (Doubao, Tavily) only activate
 In LOCAL mode, every interaction is written to `data/workspace/{user_id}/` on the server process's local disk. In MINIO mode, the same per-user tree lives as keys under `{user_id}/...` in your MinIO bucket. Nothing is sent to third parties except the LLM calls you have configured. `.gitignore` excludes `data/` and `logs/` — don't commit them.
 
 **Is `execute_code` safe?**
-It depends on the deployment mode. In **LOCAL** mode it runs bash / Python via plain `subprocess` on the same host as the server, scoped to the user's workspace directory but with no kernel-level isolation — only suitable for single-tenant trusted use. In **MINIO** mode every invocation runs in a one-shot Docker container on a separate sandbox host with its workspace mounted via s3fs; an escape from the user's code is bounded by the container, the network rules around the docker daemon, and the scope of the MinIO credentials handed in (currently the server's root creds; M3 swaps them for STS tokens scoped to `{user_id}/*`). See [SECURITY.md § 1](SECURITY.md) for the full caveat list. If you don't need the tool at all, remove `"execute_code"` from `PLUGIN_CLASSES` in `core/plugins/__init__.py` or set `DEFAULT_PLUGINS` to an explicit list that excludes it.
+LOCAL execution is a subprocess under the server's user account, without
+kernel isolation. MINIO execution uses a reusable Docker session container and
+an s3fs workspace, optionally on a separate host. Containers share the configured
+network mode and MinIO credential scope; the current backend does not implement
+per-user STS credentials or per-call network isolation. Review
+[SECURITY.md](SECURITY.md) and the [runtime details](docs/cloud-agent.md) for the
+current boundaries. Exclude `execute_code` from `DEFAULT_PLUGINS` if it is not
+needed.
 
 **Can I deploy this behind a public URL?**
 Not as-is. At minimum: put it behind an authenticating reverse proxy, disable `execute_code`, add rate limiting, and review [SECURITY.md](SECURITY.md) in full. This is a research codebase.
@@ -292,7 +436,7 @@ Not as-is. At minimum: put it behind an authenticating reverse proxy, disable `e
 See [CONTRIBUTING.md](CONTRIBUTING.md) — short sections on each.
 
 **The agent keeps saying "Hi, I'm EvoAgent" — can I change that?**
-Edit `configs/prompts/SOUL.md`. On first interaction it is copied into the user's workspace at `data/workspace/{user_id}/prompts/SOUL.md` and thereafter overwritten from source on every server restart (so edits to the source template propagate).
+Edit `configs/prompts/SOUL.md`. On first interaction it is copied into the user's workspace at `data/workspace/{user_id}/prompts/SOUL.md` and refreshed when the platform template sync version changes (so source template edits propagate while user memory remains intact).
 
 **Why does `ruff check .` pass but my IDE shows warnings?**
 The ruleset in `pyproject.toml` is deliberately loose (E, F, I, UP, B only — no line-length enforcement, no Pylint-style nitpicks). Tighten locally if you like, but CI only enforces the shipped config.

@@ -66,7 +66,7 @@ async def test_overwrite_replaces_atomically(backend):
 
 
 async def test_unicode_text_roundtrip(backend):
-    text = "测试 — émoji 🚀\n你好"
+    text = "Unicode test — émoji 🚀\nHello"
     etag = await backend.write_text("alice/prompts/zh.md", text)
     assert etag == _md5_hex(text.encode("utf-8"))
     assert await backend.read_text("alice/prompts/zh.md") == text

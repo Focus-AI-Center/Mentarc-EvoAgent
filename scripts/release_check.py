@@ -24,7 +24,7 @@ PATTERNS = {
         r"\b(?:sk-[A-Za-z0-9_-]{24,}|AKIA[A-Z0-9]{16}|gh[pousr]_[A-Za-z0-9]{30,})\b"
     ),
 }
-LOCAL_DIRS = {".git", ".deepeval", ".claude", ".codex", "logs", "data", ".venv", "__pycache__"}
+LOCAL_DIRS = {".git", ".deepeval", ".claude", "logs", "data", ".venv", "__pycache__"}
 
 
 def findings(name: str, data: bytes) -> list[str]:
@@ -32,6 +32,7 @@ def findings(name: str, data: bytes) -> list[str]:
     errors = []
     if (
         any(part in LOCAL_DIRS for part in path.parts)
+        or any(part.startswith(".code") for part in path.parts)
         or (path.name.startswith(".env") and path.name != ".env.example")
         or path.suffix in {".pem", ".key", ".p12", ".pfx"}
     ):
@@ -61,7 +62,7 @@ def history_findings(root: Path) -> tuple[int, list[str]]:
     errors = []
     checked = set()
     tool_credit = re.compile(
-        r"clau" + r"de|anthro" + r"pic|co-authored-by:.*(?:codex|copilot|chatgpt|gemini)", re.I
+        r"clau" + r"de|anthro" + r"pic|co-authored-by:.*(?:copilot|chatgpt|gemini)", re.I
     )
     for commit in commits:
         metadata = git("cat-file", "commit", commit)

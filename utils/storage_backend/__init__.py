@@ -8,10 +8,8 @@ Two implementations:
 
 - ``MinIOSDKBackend`` — S3-compatible object store accessed via ``minio-py``.
   Selected automatically when ``MINIO_ENDPOINT`` is set. Native ETag from the
-  object metadata. ``If-Match`` is implemented client-side: stat → compare →
-  PUT. The race window is acceptable for single-user serial writes; multi-
-  writer correctness will get tightened in M3 with `If-Match` request header
-  if MinIO supports it server-side.
+  object metadata. Conditional PUT uses server-side ``If-Match`` /
+  ``If-None-Match`` headers, requiring a server that supports conditional writes.
 
 Both implementations share a common async interface (``StorageBackend``)
 so callers can ``asyncio.gather(...)`` reads in parallel.
@@ -64,6 +62,9 @@ class StorageBackend(Protocol):
 
     async def read_text(self, key: str) -> str:
         """Return UTF-8 text. Raises ``KeyNotFoundError`` if missing."""
+
+    def read_text_with_etag_sync(self, key: str) -> tuple[str, str]:
+        """Return text and its ETag from the same read, for optimistic updates."""
 
     async def write_text(self, key: str, content: str, *, if_match: str | None = None) -> str:
         """Write UTF-8 text, return new ETag.

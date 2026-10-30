@@ -1,45 +1,43 @@
 ---
 name: SKILL_EXTRACT
-description: 会话后 skill 抽取与更新指南
+description: Guidance for extracting reusable skills and updating existing workflows
 variables: []
 ---
 
-## Skill 抽取与更新
+## Extraction criteria
 
-### 判断标准（全部满足才抽取）
+Extract a skill only when all criteria hold:
 
-1. **多步骤**：涉及 2 次以上工具调用，或有明确的处理流程
-2. **可复用**：未来大概率会重复触发，不是一次性任务
-3. **有结构**：有清晰的输入→处理→输出模式，可以泛化
-4. **新价值**：与已有 skill 不重叠，或有实质性改进
+1. Multiple steps: at least two tool calls, or an explicit processing workflow.
+2. Reusable: likely to recur, rather than a one-off task.
+3. Structured: a clear, generalizable input -> processing -> output pattern.
+4. New value: distinct from existing skills, or a substantive improvement.
 
-不满足以上标准（如单轮问答、闲聊、一次性查询）则跳过，不强行抽取。
+Skip simple questions, casual conversation and isolated tool calls. Do not invent a workflow.
 
-### 工作流程
+## Procedure
 
-1. 调用 `skill_manager(action="list")` 查看已有技能，避免重复
-2. 判断本次对话是否出现值得保存的新 skill 或对已有 skill 的改进
-3. **不要直接调用 save**，而是用 `[SKILL_PROPOSAL]...[/SKILL_PROPOSAL]` 格式输出建议（见 SESSION_UPDATE 指南）
-4. 用户确认后由系统保存
+1. Call `skill(action="list")` to avoid duplicates.
+2. Identify a new workflow or a meaningful improvement.
+3. Output a valid JSON proposal between `[SKILL_PROPOSAL]` and `[/SKILL_PROPOSAL]`.
+4. Do not call `save` or `ref_set` during extraction. The system saves the bundle after user confirmation.
 
-### Skill 字段规范
+## Proposal fields
 
-**name**（必填）：小写字母 + 中划线，2-4 个英文单词。如 `trend-detection`、`write-seo-report`
+- `name`: required; two to four lowercase English words separated by hyphens, such as `write-seo-report`.
+- `description`: required; one specific sentence explaining purpose and trigger conditions. Prefer "Find buyer pain points in social posts and produce three sourced opportunities" over "Help with analysis".
+- `triggers`: required; three to five varied formal and conversational English phrases.
+- `instructions`: required; numbered steps identifying tools, necessary inputs and output format. Aim for 10-30 lines.
+- `references`: optional; a JSON mapping from relative filenames to complete text, such as `{"rules.md": "Complete screening rules"}`. Paths are relative to the skill's `references/` directory; nested paths such as `examples/report.md` are supported.
+- `required_tools`: optional; tool names such as `["web_search", "fetch_url"]`.
+- `tags`: optional; category labels.
 
-**description**（必填）：一句话说明用途和适用场景，具体到能让匹配系统准确识别。
-- 好：`从 Reddit/X 社媒帖子中筛选外贸买家痛点，输出 Top 3 商机简报`
-- 差：`帮助用户完成各种分析任务`
+## Splitting long content
 
-**triggers**（必填）：3-5 个触发词，覆盖中英文和口语表达。
+Keep triggers, inputs, core steps, output requirements and reference-reading conditions in `SKILL.md`. If the main text exceeds roughly 50 lines or contains long rules, templates, API details or complete examples, move those details into references by topic.
 
-**instructions**（必填）：完整的执行步骤，使用编号，每步说明用什么工具、输出什么格式。建议 10-30 行。
+This is an organization guideline, not mechanical truncation. Preserve reusable details and avoid creating references for short skills. Each reference must contain its full text, not just a filename or placeholder.
 
-**required_tools**（可选）：技能需要的工具列表，如 `["websearch", "fetchurl"]`
+Explain when to read each reference in `instructions`, for example: before screening, call `skill(action="get_ref", name="buyer-lead-screening", ref_filename="screening-rules.md")`. Markdown links use `references/screening-rules.md`.
 
-**tags**（可选）：分类标签
-
-### 注意事项
-
-- 不要编造步骤，只提炼对话中实际出现的操作流程
-- instructions 要足够完整，让 agent 下次无需额外说明就能执行
-- 如果对话中只是用了某个工具但没有形成可复用的流程，不要抽取
+Use valid JSON with escaped newlines (`\n`); do not use YAML block strings for reference maps. The user reviews and confirms the main document and references together. Never fabricate supporting content.

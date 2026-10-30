@@ -38,10 +38,21 @@ MIN_MESSAGES_TO_KEEP = int(os.getenv("MIN_MESSAGES_TO_KEEP", "10"))
 # — see the comments in .env.example.
 DEFAULT_PLUGINS = os.getenv("DEFAULT_PLUGINS", "web_search,fetch_url")
 
+# Tool discovery controls schema visibility, not plugin/MCP authorization.
+TOOLSEARCH_ENABLED = os.getenv("TOOLSEARCH_ENABLED", "true").lower() == "true"
+TOOLSEARCH_ALWAYS_LOADED = tuple(
+    name.strip()
+    for name in os.getenv(
+        "TOOLSEARCH_ALWAYS_LOADED",
+        "memory,skill,update_user_profile,todo_manager,ask_user_question,sub_agent,parent_history",
+    ).split(",")
+    if name.strip()
+)
+
 # --- Skill ---
 SKILL_MATCH_EMBEDDING_THRESHOLD = float(os.getenv("SKILL_MATCH_EMBEDDING_THRESHOLD", "0.75"))
 
-# --- Image (Doubao / 火山引擎) ---
+# --- Image (Doubao / Volcengine) ---
 DOUBAO_API_KEY = os.getenv("DOUBAO_API_KEY", "")
 DOUBAO_MODEL = os.getenv("DOUBAO_MODEL", "doubao-seedream-4-5-251128")
 

@@ -1,4 +1,4 @@
-# EvoAgent sandbox image — one-shot container per execute_code invocation.
+# EvoAgent sandbox image — session containers and legacy one-shot execution.
 #
 # Boot sequence (entrypoint.sh):
 #   1. write MinIO creds to /etc/passwd-s3fs (mode 600)

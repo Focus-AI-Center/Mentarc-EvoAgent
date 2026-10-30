@@ -100,7 +100,7 @@ class LocalSubprocessBackend:
                     if isinstance(err.stdout, bytes)
                     else (err.stdout or "")
                 ),
-                stderr=f"执行超时（>{timeout_s}s）",
+                stderr=f"Execution timed out (>{timeout_s}s)",
                 duration_ms=int((time.time() - t0) * 1000),
                 sandbox_label=sandbox_label,
                 timed_out=True,

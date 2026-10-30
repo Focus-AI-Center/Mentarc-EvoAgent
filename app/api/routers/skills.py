@@ -36,7 +36,9 @@ async def create_skill(user_id: str, request: SkillCreateRequest):
         required_tools=request.required_tools,
         parameters=request.parameters,
         tags=request.tags,
-        source="user_defined",
+        references=request.references,
+        source=request.source,
+        extracted_from=request.extracted_from,
         status="confirmed",
         created_by=user_id,
     )

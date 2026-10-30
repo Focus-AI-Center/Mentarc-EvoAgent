@@ -23,19 +23,19 @@ _VALID_STATUSES = {"pending", "in_progress", "completed"}
 
 class TodoManagerParams(BaseModel):
     action: Literal["add", "update"] = Field(
-        description="操作类型: add=初始化任务列表, update=更新单个任务状态"
+        description="Action: add initializes tasks; update changes one task status"
     )
-    # add 时使用
+    # Used by add
     tasks: list[dict] | None = Field(
         default=None,
         description=(
-            "add 时传入完整任务列表。每项: {id: str, content: str, status: pending/in_progress/completed}"
+            "Complete task list for add. Each item: {id: str, content: str, status: pending/in_progress/completed}"
         ),
     )
-    # update 时使用
+    # Used by update
     id: str | int | None = Field(
         default=None,
-        description="update 时指定任务 ID",
+        description="Task ID for update",
     )
 
     @field_validator("id", mode="before")
@@ -45,16 +45,16 @@ class TodoManagerParams(BaseModel):
 
     status: str | None = Field(
         default=None,
-        description="update 时新状态: pending/in_progress/completed",
+        description="New status for update: pending/in_progress/completed",
     )
 
 
 class TodoManagerTool(BaseTool):
     name: str = "todo_manager"
     description: str = (
-        "管理当前任务进度，前端会展示进度面板。\n"
-        "- add: 初始化任务列表（传入 tasks 数组）\n"
-        "- update: 更新单个任务状态（传入 id + status）"
+        "Manage task progress shown in the interface.\n"
+        "- add: Initialize the task list (provide a tasks array)\n"
+        "- update: Update one task (provide id and status)"
     )
     param_anno = TodoManagerParams
 
@@ -66,7 +66,7 @@ class TodoManagerTool(BaseTool):
     async def __call__(self, params: TodoManagerParams) -> str:
         if params.action == "add":
             if not params.tasks:
-                return json.dumps({"error": "add 操作需要提供 tasks 列表"}, ensure_ascii=False)
+                return json.dumps({"error": "add requires a tasks list"}, ensure_ascii=False)
             self._tasks = []
             for t in params.tasks:
                 status = t.get("status", "pending")
@@ -82,11 +82,11 @@ class TodoManagerTool(BaseTool):
 
         elif params.action == "update":
             if not params.id:
-                return json.dumps({"error": "update 操作需要提供 id"}, ensure_ascii=False)
+                return json.dumps({"error": "update action requiresprovide id"}, ensure_ascii=False)
             status = params.status or "completed"
             if status not in _VALID_STATUSES:
                 return json.dumps(
-                    {"error": f"无效状态: {status}，可选: pending/in_progress/completed"},
+                    {"error": f"Invalid status: {status},optional: pending/in_progress/completed"},
                     ensure_ascii=False,
                 )
             # Lazy restore: if _tasks is empty, try to recover from history

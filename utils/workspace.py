@@ -24,13 +24,22 @@ import base64
 import hashlib
 import json
 import re
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from configs.settings import (
     DEFAULT_PROMPTS_DIR,
     DEFAULT_SKILLS_DIR,
 )
-from utils.storage_backend import KeyNotFoundError, StorageBackend, get_backend
+from utils.memory_index import parse_memory_index
+from utils.storage_backend import (
+    IF_MATCH_ABSENT,
+    ETagMismatchError,
+    KeyNotFoundError,
+    StorageBackend,
+    get_backend,
+)
 
 _DEFAULTS_DIR = Path(DEFAULT_PROMPTS_DIR)
 _DEFAULTS_SKILLS_DIR = Path(DEFAULT_SKILLS_DIR)
@@ -38,7 +47,7 @@ _DEFAULTS_SKILLS_DIR = Path(DEFAULT_SKILLS_DIR)
 
 def _compute_sync_version() -> str:
     """Hash of platform-owned templates. Used to gate per-user re-sync."""
-    parts: list[str] = []
+    parts: list[str] = ["skill-layout-v2"]
     soul = _DEFAULTS_DIR / "SOUL.md"
     if soul.exists():
         st = soul.stat()
@@ -216,6 +225,50 @@ class Workspace:
         _validate_segment(name)
         self._write_text(self._key("prompts", f"{name}.md"), content)
 
+    def update_prompt(self, name: str, transform: Callable[[str], str]) -> str:
+        """Apply a pure transform to the latest prompt, retrying competing writes.
+
+        The callback may run more than once. This protects one prompt at a time;
+        changes spanning several prompt files are not a transaction.
+        """
+        key = self._key("prompts", f"{name}.md")
+        for attempt in range(64):
+            try:
+                raw, etag = self._backend.read_text_with_etag_sync(key)
+            except KeyNotFoundError:
+                raw, etag = "", IF_MATCH_ABSENT
+            updated = transform(raw)
+            if updated == raw:
+                return raw
+            try:
+                self._backend.write_text_sync(key, updated, if_match=etag)
+                return updated
+            except ETagMismatchError:
+                if attempt == 63:
+                    raise
+                time.sleep(min(0.001 * (attempt + 1), 0.02))
+        raise AssertionError("unreachable")
+
+    def file_read(self, file_path: str) -> str | None:
+        """Read a UTF-8 file relative to this user's workspace, on either backend."""
+        key = self._workspace_file_key(file_path)
+        try:
+            return self._backend.read_text_sync(key)
+        except KeyNotFoundError:
+            return None
+
+    def _workspace_file_key(self, file_path: str) -> str:
+        _validate_segment(file_path, allow_slash=True)
+        file_path = file_path.replace("\\", "/")
+        # The local backend confines keys to its root; additionally confine
+        # symlinks to this user so a file reference cannot read another user.
+        from utils.storage_backend.localfs import LocalFSBackend
+
+        if isinstance(self._backend, LocalFSBackend):
+            user_root = self._backend.root / self.user_id
+            (user_root / file_path).resolve().relative_to(user_root)
+        return f"{self.user_id}/{file_path}"
+
     def list_prompts(self) -> list[str]:
         names = set()
         if _DEFAULTS_DIR.exists():
@@ -271,9 +324,39 @@ class Workspace:
                 continue
             try:
                 refs[rel] = self._backend.read_text_sync(k)
-            except KeyNotFoundError:
+            except (KeyNotFoundError, UnicodeDecodeError):
                 pass
         return refs
+
+    def skill_resource_set(self, name: str, relative_path: str, data: bytes) -> None:
+        """Write an auxiliary file at its original path within the skill directory."""
+        _validate_segment(relative_path, allow_slash=True)
+        if Path(relative_path.replace("\\", "/")).name == "SKILL.md":
+            raise ValueError("Use skill_set for SKILL.md")
+        self._write_bytes(self._key("skills", name, relative_path), data)
+
+    def skill_resources_get(self, name: str) -> dict[str, bytes]:
+        """Return scripts/assets and binary references, excluding nested skills."""
+        prefix = self._key("skills", name) + "/"
+        keys = self._list(prefix)
+        nested = [k[: -len("SKILL.md")] for k in keys if k != prefix + "SKILL.md" and k.endswith("/SKILL.md")]
+        resources = {}
+        for key in keys:
+            rel = key[len(prefix) :]
+            if rel == "SKILL.md" or any(key.startswith(child) for child in nested):
+                continue
+            data = self._read_bytes(key)
+            if data is None:
+                continue
+            if rel.startswith("references/"):
+                try:
+                    data.decode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+                else:
+                    continue  # Text references already have their own snapshot field.
+            resources[rel] = data
+        return resources
 
     def skill_ref_set(self, name: str, filename: str, content: str) -> None:
         # filename can be nested under references/, e.g. "deep/file.md".
@@ -379,11 +462,7 @@ class Workspace:
             refs_prefix = self._key("skills", skill_name, "references") + "/"
             self._delete(refs_prefix)
             for rel, file_path in ref_files:
-                norm = rel[len("references/") :] if rel.startswith("references/") else rel
-                try:
-                    self.skill_ref_set(skill_name, norm, file_path.read_text(encoding="utf-8"))
-                except (OSError, UnicodeDecodeError):
-                    pass
+                self.skill_resource_set(skill_name, rel, file_path.read_bytes())
             if skill_name in existing:
                 updated += 1
             else:
@@ -476,9 +555,22 @@ class Workspace:
 
     def export_snapshot(self) -> dict:
         prompts = {name: self.read_prompt(name) for name in self.list_prompts() if self.read_prompt(name)}
+        memory_files = {}
+        for entry in parse_memory_index(self.read_prompt("MEMORY")):
+            if entry.file_path is not None:
+                content = self.file_read(entry.file_path)
+                if content is not None:
+                    memory_files[entry.file_path] = content
         skills = {}
         for name, content in self.skill_get_all().items():
-            skills[name] = {"content": content, "refs": self.skill_refs_get(name)}
+            skills[name] = {
+                "content": content,
+                "refs": self.skill_refs_get(name),
+                "resources": {
+                    path: base64.b64encode(data).decode("ascii")
+                    for path, data in self.skill_resources_get(name).items()
+                },
+            }
         sessions = {}
         for item in self.list_sessions():
             sid = item["session_id"]
@@ -499,6 +591,7 @@ class Workspace:
             "version": 1,
             "user_id": self.user_id,
             "prompts": prompts,
+            "memory_files": memory_files,
             "skills": skills,
             "sessions": {"index": self.list_sessions(), "records": sessions},
             "images": images,
@@ -511,6 +604,9 @@ class Workspace:
         for name, content in (snapshot.get("prompts") or {}).items():
             if isinstance(name, str) and isinstance(content, str):
                 self.write_prompt(name, content)
+        for file_path, content in (snapshot.get("memory_files") or {}).items():
+            if isinstance(file_path, str) and isinstance(content, str):
+                self._write_text(self._workspace_file_key(file_path), content)
         for skill_name, payload in (snapshot.get("skills") or {}).items():
             if isinstance(payload, dict):
                 content = payload.get("content")
@@ -519,6 +615,9 @@ class Workspace:
                 for ref_name, ref_content in (payload.get("refs") or {}).items():
                     if isinstance(ref_name, str) and isinstance(ref_content, str):
                         self.skill_ref_set(skill_name, ref_name, ref_content)
+                for path, encoded in (payload.get("resources") or {}).items():
+                    if isinstance(path, str) and isinstance(encoded, str):
+                        self.skill_resource_set(skill_name, path, base64.b64decode(encoded, validate=True))
         for sid, record in (snapshot.get("sessions", {}).get("records") or {}).items():
             if isinstance(sid, str) and isinstance(record, dict):
                 self.history_save(sid, record)

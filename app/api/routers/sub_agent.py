@@ -31,7 +31,7 @@ async def sub_agent_chat(agent_type: str, request: AgentRequest):
     request_id = request.requestId or str(uuid.uuid4())[:8]
     user_input = request.data.input
     if request.data.images:
-        user_input += "\n\n[用户上传的图片]\n" + "\n".join(request.data.images)
+        user_input += "\n\n[User-uploaded images]\n" + "\n".join(request.data.images)
 
     logger.info(
         f"Sub-agent chat: type={agent_type} user={user_id} session={session_id} input={user_input[:200]}..."

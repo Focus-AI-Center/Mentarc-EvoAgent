@@ -1,6 +1,19 @@
 """Skill data models for API layer."""
 
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+
+from utils.skill_references import normalize_references
+
+
+class SkillReferenceFields(BaseModel):
+    references: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("references")
+    @classmethod
+    def validate_references(cls, value):
+        return normalize_references(value)
 
 
 class SkillParam(BaseModel):
@@ -10,7 +23,7 @@ class SkillParam(BaseModel):
     example: str
 
 
-class SkillCreateRequest(BaseModel):
+class SkillCreateRequest(SkillReferenceFields):
     name: str
     description: str
     triggers: list[str]
@@ -18,6 +31,8 @@ class SkillCreateRequest(BaseModel):
     required_tools: list[str] = []
     parameters: list[SkillParam] = []
     tags: list[str] = []
+    source: Literal["user_defined", "extracted"] = "user_defined"
+    extracted_from: str | None = None
 
 
 class SkillUpdateRequest(BaseModel):
@@ -27,3 +42,9 @@ class SkillUpdateRequest(BaseModel):
     required_tools: list[str] | None = None
     parameters: list[SkillParam] | None = None
     tags: list[str] | None = None
+    references: dict[str, str] | None = None
+
+    @field_validator("references")
+    @classmethod
+    def validate_references(cls, value):
+        return normalize_references(value) if value is not None else None

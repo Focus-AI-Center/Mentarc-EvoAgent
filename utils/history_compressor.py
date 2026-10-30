@@ -119,9 +119,11 @@ class HistoryCompressor:
                 if len(content) > 5000:
                     urls = self._extract_urls(content)
                     if urls:
-                        msg["content"] = f"[已压缩] 工具结果包含链接: {urls}"
+                        msg["content"] = f"[Compressed] Tool result links: {urls}"
                     else:
-                        msg["content"] = f"[已压缩] 工具输出（原始长度 {len(content)} 字符）"
+                        msg["content"] = (
+                            f"[Compressed] Tool output (original length: {len(content)} characters)"
+                        )
             compressed.append(msg)
         return compressed
 
@@ -134,51 +136,45 @@ class HistoryCompressor:
         for msg in messages:
             content = msg.get("content")
             if content is None:
-                content = "[工具调用]"
+                content = "[Tool call]"
             else:
                 content = str(content)[:800]
             line = f"{msg.get('role', 'unknown')}: {content}"
             if total_chars + len(line) > max_total_chars:
-                lines.append(f"... (省略剩余 {len(messages) - len(lines)} 条消息)")
+                lines.append(f"... (omitted {len(messages) - len(lines)} remaining messages)")
                 break
             lines.append(line)
             total_chars += len(line)
 
         conversation_text = "\n".join(lines)
         prompt = (
-            "你正在为一个长对话生成续航摘要。这份摘要将**完全替换**原始对话历史，"
-            "Agent 将只能看到这份摘要来继续工作。\n\n"
+            "Create a continuation summary that will completely replace this conversation history. "
+            "The agent must be able to resume using only your summary.\n\n"
             f"{conversation_text}\n\n"
-            "请用 <summary></summary> 标签包裹摘要，按以下 9 个部分输出：\n\n"
+            "Wrap the summary in <summary></summary> and include these nine sections:\n\n"
             "## 1. Primary Request and Intent\n"
-            "用户的原始请求及后续调整。引用关键需求原文。\n\n"
+            "The original request and subsequent steering. Quote critical requirements.\n\n"
             "## 2. Key Technical Concepts\n"
-            "对话中涉及的关键技术概念、方案决策及其理由。\n\n"
+            "Technical concepts, decisions and their reasons.\n\n"
             "## 3. Files and Code Sections\n"
-            "涉及的文件、代码片段、配置：\n"
-            "- 文件名及其作用\n"
-            "- 具体的改动内容\n"
-            "- 关键代码片段（函数签名、配置值等）\n\n"
+            "File paths, their purposes, exact changes and essential signatures or configuration values.\n\n"
             "## 4. Errors and Fixes\n"
-            "- 遇到的错误及解决方式\n"
-            "- 失败的方案（避免重试）\n"
-            '- 用户的纠正原文（"不要X"、"其实我要Y"）\n\n'
+            "Errors, resolutions, unsuccessful approaches to avoid repeating, and exact user corrections.\n\n"
             "## 5. Problem Solving\n"
-            "- 已解决的问题及方案\n"
-            "- 正在排查的问题及当前进展\n\n"
+            "Resolved problems and ongoing investigations with their current progress.\n\n"
             "## 6. All User Messages\n"
-            "所有非工具类的用户消息要点（保留用户原始表达）。\n\n"
+            "Key points from every non-tool user message, preserving the original phrasing.\n\n"
             "## 7. Pending Tasks\n"
-            "用户请求但尚未开始的事项。\n\n"
+            "Requested tasks that have not started.\n\n"
             "## 8. Current Work\n"
-            "中断时正在进行的具体任务，包括精确状态和中间结果。\n\n"
+            "The interrupted task, exact state and intermediate results.\n\n"
             "## 9. Optional Next Steps\n"
-            "建议的下一步行动。\n\n"
-            "**保留规则**：\n"
-            "- 必须保留：精确标识符（URL/路径/ID/名称）、错误信息原文、用户纠正和负面反馈、具体值/公式/配置、技术约束\n"
-            "- 压缩优先级（如需裁剪）：用户纠正 > 错误 > 进行中工作 > 已完成工作\n"
-            "- 可丢弃：客套话、确认语、重复解释\n"
-            "- 近期消息权重更高，侧重「接下来做什么」"
+            "Suggested next actions.\n\n"
+            "Preserve exact URLs, paths, IDs, names, error messages, user corrections, negative feedback, "
+            "values, formulas, configuration and technical constraints. "
+            "If space is limited, prioritize corrections, errors, ongoing work, then completed work. "
+            "Omit pleasantries, acknowledgements and repeated explanations. "
+            "Give recent messages greater weight and emphasize what to do next."
         )
 
         try:
@@ -187,7 +183,7 @@ class HistoryCompressor:
                 messages=[
                     {
                         "role": "system",
-                        "content": "你是一个对话续航摘要助手。你的摘要将替换原始对话，让 Agent 能无缝继续工作。",
+                        "content": "Summarize conversations for continuation. Your summary replaces the original history and must let the agent resume seamlessly.",
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -198,10 +194,10 @@ class HistoryCompressor:
             # Some models (e.g. DeepSeek-R1) may put content in reasoning_content
             if result is None:
                 result = getattr(response.choices[0].message, "reasoning_content", None)
-            return result or "摘要内容为空"
+            return result or "Summary is empty"
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
-            return f"摘要生成失败: {str(e)}"
+            return f"Summary generation failed: {str(e)}"
 
     # --- Split helpers ---
 
@@ -267,12 +263,12 @@ class HistoryCompressor:
                 turn += 1
 
             # User-uploaded images
-            if role == "user" and "[用户上传的图片]" in content:
-                after = content.split("[用户上传的图片]")[-1]
+            if role == "user" and "[User-uploaded images]" in content:
+                after = content.split("[User-uploaded images]")[-1]
                 for url in re.findall(r"https?://\S+", after):
                     user_images.append((turn, url))
 
-            # Tool calls: fetchurl URLs, skill_manager get/get_ref
+            # Tool calls: fetchurl URLs, skill get/get_ref (including legacy names)
             if role == "assistant" and msg.get("tool_calls"):
                 for tc in msg.get("tool_calls", []):
                     func = tc.get("function", {})
@@ -283,7 +279,7 @@ class HistoryCompressor:
                         continue
                     if fname == "fetchurl" and args.get("url"):
                         fetched_urls.append((turn, args["url"]))
-                    elif fname == "skill_manager":
+                    elif fname in ("skill", "skill_manager"):
                         action = args.get("action", "")
                         if action == "get" and args.get("name"):
                             skills.add(args["name"])
@@ -305,31 +301,32 @@ class HistoryCompressor:
 
         parts = []
         if skills:
-            parts.append(f"- 活跃技能：{', '.join(sorted(skills))}")
+            parts.append(f"- Active skills:{', '.join(sorted(skills))}")
         if references:
-            parts.append(f"- 已加载参考文件：{', '.join(sorted(references))}")
+            parts.append(f"- loadedReference files:{', '.join(sorted(references))}")
         if user_images:
             seen = {}
             for t, url in user_images:
                 if url not in seen:
                     seen[url] = t
-            parts.append("- 用户图片：" + ", ".join(f"{url}(第{t}轮)" for url, t in seen.items()))
+            parts.append("- User images:" + ", ".join(f"{url}(turn {t})" for url, t in seen.items()))
         if fetched_urls:
             seen = {}
             for t, url in fetched_urls:
                 if url not in seen:
                     seen[url] = t
-            parts.append("- 已抓取 URL：" + ", ".join(f"{url}(第{t}轮)" for url, t in seen.items()))
+            parts.append("- Fetched URLs:" + ", ".join(f"{url}(turn {t})" for url, t in seen.items()))
         if generated_images:
             seen = {}
             for t, url in generated_images:
                 if url not in seen:
                     seen[url] = t
             parts.append(
-                f"- 已生成图片(共{len(seen)}张)：" + ", ".join(f"{url}(第{t}轮)" for url, t in seen.items())
+                f"- Generated images ({len(seen)} total):"
+                + ", ".join(f"{url}(turn {t})" for url, t in seen.items())
             )
 
-        return "[会话素材索引]\n" + "\n".join(parts) if parts else ""
+        return "[Session asset index]\n" + "\n".join(parts) if parts else ""
 
     # --- Main compression ---
 

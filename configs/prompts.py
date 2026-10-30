@@ -9,10 +9,10 @@ created, these are copied into {workspace}/prompts/ for per-user customization.
 The Agent reads prompts from the user workspace, not from configs/prompts/.
 
 Prompt files:
-    SOUL.md            - Agent 身份、人格、能力、工作原则（含画像/技能指令）
-    USER.md            - 用户画像（Agent 直接读写，无模板变量）
-    SKILL_MATCH.md     - 用户输入匹配技能（LLM 兜底）
-    SKILL_CONFIRM.md   - 候选技能确认提示
+    SOUL.md            - Agent identity, capabilities and operating principles
+    USER.md            - User profile (read and written directly, no template variables)
+    SKILL_MATCH.md     - Match user requests to skills (LLM fallback)
+    SKILL_CONFIRM.md   - Candidate skill confirmation prompt
 
 Usage:
     # Per-user prompt manager (in agent.py)

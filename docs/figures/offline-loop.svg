@@ -62,13 +62,13 @@
   <text x="500" y="276" text-anchor="middle" font-weight="bold" fill="#7a5900">Long-Term Memory Updater</text>
   <text x="500" y="296" text-anchor="middle" fill="#7a5900" font-size="11">MEMORY.md + MEMORY_{4 types}.md</text>
   <text x="500" y="316" text-anchor="middle" fill="#7a5900" font-size="11">user · feedback · project · reference</text>
-  <text x="500" y="336" text-anchor="middle" fill="#7a5900" font-size="11">update_memory: index + details</text>
+  <text x="500" y="336" text-anchor="middle" fill="#7a5900" font-size="11">memory: index + details</text>
 
   <rect x="700" y="250" width="260" height="110" rx="10" fill="#fdf6e3" stroke="#b58900" stroke-width="1.5"/>
   <text x="830" y="276" text-anchor="middle" font-weight="bold" fill="#7a5900">Skill Evolution</text>
   <text x="830" y="296" text-anchor="middle" fill="#7a5900" font-size="11">candidate extraction from transcript</text>
   <text x="830" y="316" text-anchor="middle" fill="#7a5900" font-size="11">maturity scoring · promote on pass</text>
-  <text x="830" y="336" text-anchor="middle" fill="#7a5900" font-size="11">skill_manager tool</text>
+  <text x="830" y="336" text-anchor="middle" fill="#7a5900" font-size="11">skill tool</text>
 
   <!-- reviewer → 3 updaters (invoke) -->
   <line x1="760" y1="140" x2="210" y2="250" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>

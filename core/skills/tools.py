@@ -43,7 +43,7 @@ class ListSkillsTool(BaseTool):
         lines = []
         for skill in skills.values():
             triggers = ", ".join(skill.triggers[:3])
-            lines.append(f"- **{skill.name}**: {skill.description} (触发词: {triggers})")
+            lines.append(f"- **{skill.name}**: {skill.description} (Triggers: {triggers})")
         return "\n".join(lines)
 
 
@@ -72,11 +72,11 @@ class ActivateSkillTool(BaseTool):
         # Increment usage
         self._skill_manager.increment_usage(self._user_id, skill_name)
 
-        result = f"## 技能: {skill.name}\n\n{skill.instructions}"
+        result = f"## Skill: {skill.name}\n\n{skill.instructions}"
         if skill.parameters:
             params = "\n".join(
-                f"- **{p.name}**: {p.description} (示例: {p.example})" for p in skill.parameters
+                f"- **{p.name}**: {p.description} (Example: {p.example})" for p in skill.parameters
             )
-            result += f"\n\n## 参数\n{params}"
+            result += f"\n\n## parameters\n{params}"
 
         return result

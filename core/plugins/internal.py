@@ -6,15 +6,21 @@ and memory during conversation.
 
 import json
 import re
+import shlex
+from collections.abc import Callable
 from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from core.agent_compat import BaseTool
 from core.skills.manager import SkillManager
+from utils.context_assets import memory_index_notice, skill_location_context
 from utils.logger import logger
+from utils.memory_index import MEMORY_TYPES, MemoryIndexEntry, parse_memory_index
+from utils.skill_references import normalize_reference_path, normalize_references
+from utils.tool_names import normalize_tool_references
 from utils.workspace import Workspace
 from utils.ws_call import ws_call
 
@@ -25,80 +31,88 @@ class UpdateUserProfileParams(BaseModel):
     """Update user profile fields. Supports both full update (update) and incremental append (append)."""
 
     action: Literal["update", "append"] = Field(
-        description="操作类型: update=全量更新字段，append=追加/更新字段（推荐用 append）"
+        description="Action: update replaces supplied values; append merges supplied values (recommended)"
     )
-    # 基本信息字段
-    name: str | None = Field(default=None, description="用户姓名")
-    nickname: str | None = Field(default=None, description="用户称呼/昵称")
-    timezone: str | None = Field(default=None, description="用户时区，如 Asia/Shanghai (GMT+8)")
-    workspace: str | None = Field(default=None, description="用户工作目录路径")
-    social_accounts: str | None = Field(default=None, description="社交账号，多个用换行分隔")
+    # Basic profile fields
+    name: str | None = Field(default=None, description="User name")
+    nickname: str | None = Field(default=None, description="Preferred name/nickname")
+    timezone: str | None = Field(default=None, description="User timezone, such as Asia/Shanghai (GMT+8)")
+    workspace: str | None = Field(default=None, description="User workspace path")
+    social_accounts: str | None = Field(
+        default=None, description="Social accounts,separate multiple values with newlines"
+    )
 
-    # 外贸业务信息字段
+    # Business profile fields
     main_products: str | None = Field(
-        default=None, description="主营产品（细化到关键词、产品名称或核心业务方向）"
+        default=None, description="Main products, product names or business focus"
     )
-    company_name: str | None = Field(default=None, description="公司名称（全称或简称）")
-    company_website: str | None = Field(default=None, description="公司网址（官网、独立站等）")
+    company_name: str | None = Field(default=None, description="Company name, full or abbreviated")
+    company_website: str | None = Field(default=None, description="Company website URL")
     company_scale: str | None = Field(
-        default=None, description="公司规模（外贸SOHO/个体经营/小微团队/成长型/成熟公司）"
+        default=None,
+        description="Company scale, such as individual business, small team or established company",
     )
     current_stage: str | None = Field(
         default=None,
-        description="当前主要阶段/目标（刚起步/开拓新市场/拓展销售渠道/增加客户量/提升运营效率）",
+        description="Current stage/goals(starting out/entering new markets/expanding sales channels/growing the customer base/improving operational efficiency)",
     )
-    main_industry: str | None = Field(default=None, description="主要行业（企业所属行业）")
-    target_markets: str | None = Field(default=None, description="目标市场（全球地区、大洲/国家/范围）")
+    main_industry: str | None = Field(default=None, description="Main industry(Company industry)")
+    target_markets: str | None = Field(
+        default=None, description="Target markets(global regions,continents/countries/scope)"
+    )
     platform_preference: str | None = Field(
-        default=None, description="平台偏好（B2B平台、社媒平台、B2C、独立站等）"
+        default=None, description="Preferred B2B, B2C, social or company website platforms"
     )
     style_preference: str | None = Field(
-        default=None, description="风格偏好（语言风格、品牌风格、视觉风格等）"
+        default=None, description="Style preferences(Language style,brand style,visual style)"
     )
     business_strategy: str | None = Field(
-        default=None, description="商务策略偏好（样品政策、报价策略、跟进方式、付款偏好等公司层面的商务习惯）"
+        default=None,
+        description="Business strategy(sample policy,pricing,follow-up approach,payment preferences and other company practices)",
     )
 
-    # 通用信息字段
-    background: str | None = Field(default=None, description="行业、角色、关注领域、工作内容")
-    preferences: str | None = Field(default=None, description="语言、沟通风格、输出格式偏好")
+    # General profile fields
+    background: str | None = Field(default=None, description="industry,role,interests,work")
+    preferences: str | None = Field(
+        default=None, description="language,communication style,Output format preferences"
+    )
 
     multi_field_append: bool | None = Field(
-        default=True, description="多行字段是否追加到末尾而非替换（仅 append 生效）"
+        default=True, description="Append to multiline fields instead of replacing them(append only)"
     )
 
 
-# English param name → Chinese USER.md field name
+# Tool parameter -> English USER.md field label
 _PARAM_TO_FIELD = {
-    # 基本信息
-    "name": "姓名",
-    "nickname": "称呼",
-    "timezone": "时区",
-    "workspace": "工作区",
-    "social_accounts": "社交账号",
-    # 外贸业务信息
-    "main_products": "主营产品",
-    "company_name": "公司名称",
-    "company_website": "公司网址",
-    "company_scale": "公司规模",
-    "current_stage": "当前主要阶段/目标",
-    "main_industry": "主要行业",
-    "target_markets": "目标市场",
-    "platform_preference": "平台偏好",
-    "style_preference": "风格偏好",
-    "business_strategy": "商务策略偏好",
-    # 通用信息
-    "background": "背景",
-    "preferences": "偏好",
+    # Basic information
+    "name": "Name",
+    "nickname": "Nickname",
+    "timezone": "Timezone",
+    "workspace": "Workspace",
+    "social_accounts": "Social accounts",
+    # Business information
+    "main_products": "Main products",
+    "company_name": "Company name",
+    "company_website": "Company website",
+    "company_scale": "Company scale",
+    "current_stage": "Current stage/goals",
+    "main_industry": "Main industry",
+    "target_markets": "Target markets",
+    "platform_preference": "Platform preferences",
+    "style_preference": "Style preferences",
+    "business_strategy": "Business strategy",
+    # General information
+    "background": "Background",
+    "preferences": "Preferences",
 }
 
 
 class UpdateUserProfileTool(BaseTool):
     name: str = "update_user_profile"
     description: str = (
-        "按字段更新用户画像。支持两种模式：\n"
-        "- update: 全量更新字段（部分字段未传入时保留原值）\n"
-        "- append: 追加/更新字段（推荐使用，未传入字段保留，多行字段智能追加）"
+        "Update individual user profile fields. Supports two modes:\n"
+        "- update: Replace supplied fields and preserve omitted values\n"
+        "- append: Merge supplied values, preserve omitted fields and append multiline content"
     )
     param_anno = UpdateUserProfileParams
 
@@ -112,12 +126,12 @@ class UpdateUserProfileTool(BaseTool):
             # Determine operation type
             is_append = params.action == "append"
 
-            # Map English param names → Chinese field names, skip None
+            # Map tool parameters to profile labels, skipping omitted values
             updates = {}
-            for eng, cn in _PARAM_TO_FIELD.items():
-                val = getattr(params, eng)
+            for parameter, label in _PARAM_TO_FIELD.items():
+                val = getattr(params, parameter)
                 if val is not None:
-                    updates[cn] = val
+                    updates[label] = val
 
             if is_append:
                 updated = await _append_user_profile_fields(
@@ -127,7 +141,9 @@ class UpdateUserProfileTool(BaseTool):
                 updated = await _update_user_profile_fields(self._user_id, updates, ws=self._ws)
 
             if not updated:
-                return json.dumps({"success": False, "message": "没有有效字段被更新。"}, ensure_ascii=False)
+                return json.dumps(
+                    {"success": False, "message": "No valid fields were updated."}, ensure_ascii=False
+                )
 
             # Read updated fields' full values from profile after write
             ws = self._ws
@@ -137,64 +153,77 @@ class UpdateUserProfileTool(BaseTool):
             # Only the fields that were updated, with their complete post-update values
             fields = {k: all_fields.get(k, "") for k in updated}
 
-            action_text = "追加" if is_append else "更新"
-            fields_str = "、".join(updated)
-            logger.info(f"{action_text.capitalize()}d user profile fields [{fields_str}] for {self._user_id}")
+            action_text = "Appended" if is_append else "Updated"
+            fields_str = ", ".join(updated)
+            logger.info(f"{action_text} user profile fields [{fields_str}] for {self._user_id}")
             return json.dumps(
                 {
                     "success": True,
                     "action": action_text,
                     "fields": fields,
-                    "message": f"已{action_text}字段：{fields_str}",
+                    "message": f"{action_text} fields: {fields_str}",
                 },
                 ensure_ascii=False,
             )
         except Exception as e:
             logger.error(f"Failed to update user profile: {e}")
-            return json.dumps({"success": False, "message": f"操作失败: {str(e)}"}, ensure_ascii=False)
+            return json.dumps(
+                {"success": False, "message": f"Operation failed: {str(e)}"}, ensure_ascii=False
+            )
 
 
 # --- Skill Manager Tool (read-only) ---
 
 
-class SkillManagerParams(BaseModel):
+class SkillParams(BaseModel):
     action: Literal["list", "get", "get_ref", "save", "delete", "ref_set", "ref_del"] = Field(
         description=(
-            "操作类型: list=列出技能, get=加载技能文档, get_ref=获取参考文件, "
-            "save=保存技能（立即生效）, delete=删除技能, "
-            "ref_set=写入支撑文件, ref_del=删除支撑文件"
+            "Actions: list, get (main document), get_ref (reference body), "
+            "save (effective immediately), delete, "
+            "ref_set (write reference), ref_del (delete reference)"
         )
     )
-    name: str = Field(default="", description="技能名称（list 时可选，其他操作必填）")
+    name: str = Field(default="", description="Skill name; optional for list and required for other actions")
     ref_filename: str = Field(
-        default="", description="参考文件路径（get_ref/ref_set/ref_del 必填，如 references/xxx.md）"
+        default="",
+        description="Reference path relative to references/ path (required for get_ref/ref_set/ref_del, such as rules.md)",
     )
-    # --- save 专用字段 ---
-    description: str = Field(default="", description="技能描述（save 必填）")
-    triggers: list[str] = Field(default=[], description="触发词列表（save 必填）")
-    instructions: str = Field(default="", description="技能执行步骤（save 必填）")
-    required_tools: list[str] = Field(default=[], description="所需工具列表（save 可选）")
-    tags: list[str] = Field(default=[], description="分类标签（save 可选）")
+    # --- save only fields ---
+    description: str = Field(default="", description="Skill description(save required)")
+    triggers: list[str] = Field(default=[], description="Trigger phrases(save required)")
+    instructions: str = Field(default="", description="Skill execution steps(save required)")
+    references: dict[str, str] = Field(
+        default_factory=dict,
+        description='Optional for save: mapping of reference paths to complete text, such as {"rules.md":"Detailed rules"},saved together with the main document',
+    )
+
+    @field_validator("references")
+    @classmethod
+    def validate_references(cls, value):
+        return normalize_references(value)
+
+    required_tools: list[str] = Field(default=[], description="Required tool names(save optional)")
+    tags: list[str] = Field(default=[], description="Category tags(save optional)")
     source: str = Field(
-        default="user_defined", description="技能来源: user_defined 或 extracted（save 可选）"
+        default="user_defined", description="Optional source for save: user_defined or extracted"
     )
-    # --- ref_set 专用字段 ---
-    ref_content: str = Field(default="", description="支撑文件内容（ref_set 必填）")
+    # --- ref_set only fields ---
+    ref_content: str = Field(default="", description="Reference file content(ref_set required)")
 
 
-class SkillManagerTool(BaseTool):
-    name: str = "skill_manager"
+class SkillTool(BaseTool):
+    name: str = "skill"
     description: str = (
-        "技能管理工具。\n"
-        "- list: 列出技能\n"
-        "- get: 加载技能文档和参考文件列表\n"
-        "- get_ref: 获取参考文件内容\n"
-        "- save: 保存/创建技能（立即生效）\n"
-        "- delete: 删除技能\n"
-        "- ref_set: 写入支撑文件\n"
-        "- ref_del: 删除支撑文件"
+        "Manage skills.\n"
+        "- list: List skills\n"
+        "- get: Load the main document and reference list\n"
+        "- get_ref: Read a reference body\n"
+        "- save: Save/Create skill(effective immediately)\n"
+        "- delete: Delete skill\n"
+        "- ref_set: Write a reference file\n"
+        "- ref_del: Delete a reference file"
     )
-    param_anno = SkillManagerParams
+    param_anno = SkillParams
 
     def __init__(
         self,
@@ -211,7 +240,7 @@ class SkillManagerTool(BaseTool):
         self._ws = workspace or Workspace(user_id)
         self._got_skills: set = set()
 
-    async def __call__(self, params: SkillManagerParams) -> str:
+    async def __call__(self, params: SkillParams) -> str:
         try:
             if params.action == "list":
                 return self._action_list(params.name)
@@ -228,15 +257,15 @@ class SkillManagerTool(BaseTool):
             elif params.action == "ref_del":
                 return await self._action_ref_del(params.name, params.ref_filename)
             else:
-                return f"未知操作: {params.action}"
+                return f"Unknown action: {params.action}"
         except Exception as e:
-            logger.error(f"skill_manager {params.action} failed: {e}")
-            return f"操作失败: {str(e)}"
+            logger.error(f"skill {params.action} failed: {e}")
+            return f"Operation failed: {str(e)}"
 
     def _action_list(self, parent: str = "") -> str:
         all_skills = self._skill_manager.get_all_skills(self._user_id)
         if not all_skills:
-            return "当前没有已确认的技能。"
+            return "No confirmed skills available."
 
         if parent:
             prefix = parent.rstrip("/") + "/"
@@ -244,51 +273,55 @@ class SkillManagerTool(BaseTool):
                 k: v for k, v in all_skills.items() if k.startswith(prefix) and "/" not in k[len(prefix) :]
             }
             if not children:
-                return f"技能 '{parent}' 没有子技能。"
+                return f"Skill '{parent}' has no child skills."
             lines = [f"- **{s.name}**: {s.description}" for s in children.values()]
-            return f"'{parent}' 的子技能 ({len(children)}):\n" + "\n".join(lines)
+            return f"'{parent}' child skills ({len(children)}):\n" + "\n".join(lines)
 
         top_level = {k: v for k, v in all_skills.items() if "/" not in k}
         if not top_level:
-            return "当前没有已确认的技能。"
+            return "No confirmed skills available."
         lines = []
         for s in top_level.values():
-            triggers = ", ".join(s.triggers) if s.triggers else "无"
+            triggers = ", ".join(s.triggers) if s.triggers else "none"
             lines.append(
-                f"- **{s.name}** (v{s.version}, 使用{s.usage_count}次): {s.description} [触发词: {triggers}]"
+                f"- **{s.name}** (v{s.version}, used {s.usage_count} times): {s.description} [Triggers: {triggers}]"
             )
-        return f"已确认技能 ({len(top_level)}):\n" + "\n".join(lines)
+        return f"Confirmed skills ({len(top_level)}):\n" + "\n".join(lines)
 
     async def _action_get(self, name: str) -> str:
         if not name:
-            return "请提供技能名称。"
+            return "Provide a skill name."
         if name in self._got_skills:
-            return f"技能 '{name}' 已加载，无需重复获取。"
+            return f"Skill '{name}' loaded,no need to load it again."
 
         raw = await ws_call(self._ws, "skill_get", name)
         if not raw:
-            return f"技能 '{name}' 不存在。"
+            return f"Skill '{name}' does not exist."
         self._got_skills.add(name)
+        raw = normalize_tool_references(raw)
 
-        result = f"技能文档 `{name}/SKILL.md`:\n\n```markdown\n{raw}\n```"
+        result = f"Skill document `{name}/SKILL.md`:\n\n```markdown\n{raw}\n```"
+        result += f"\n\n{skill_location_context(name)}"
         refs = await ws_call(self._ws, "skill_refs_get", name)
         if refs:
-            result += f"\n\n可用支撑文件 ({len(refs)}):"
+            result += f"\n\nAvailable references ({len(refs)}):"
             for filename, content in refs.items():
-                result += f"\n- `{filename}` ({len(content)}字符) → skill_manager(action='get_ref', name='{name}', ref_filename='{filename}')"
+                result += f"\n- `{filename}` ({len(content)} characters) → skill(action='get_ref', name='{name}', ref_filename='{filename}')"
         return result
 
     async def _action_get_ref(self, name: str, ref_filename: str) -> str:
         if not name or not ref_filename:
-            return "请提供技能名称和参考文件路径。"
+            return "Provide a skill name and reference path."
         refs = await ws_call(self._ws, "skill_refs_get", name)
+        normalized = normalize_reference_path(ref_filename)
+        ref_filename = normalized if normalized in refs else ref_filename
         if ref_filename not in refs:
-            return f"参考文件 '{ref_filename}' 不存在于技能 '{name}' 中。"
-        return f"`{name}/{ref_filename}`:\n\n```\n{refs[ref_filename]}\n```"
+            return f"Reference file '{ref_filename}' is not present in skill '{name}'."
+        return f"`skills/{name}/references/{ref_filename}`:\n\n```\n{refs[ref_filename]}\n```"
 
-    def _action_save(self, params: SkillManagerParams) -> str:
+    def _action_save(self, params: SkillParams) -> str:
         if not params.name or not params.description or not params.instructions:
-            return "save 操作需要 name、description、instructions 三个字段。"
+            return "save requires name, description and instructions."
         from core.skills import Skill
 
         skill = Skill(
@@ -296,6 +329,7 @@ class SkillManagerTool(BaseTool):
             description=params.description,
             triggers=params.triggers,
             instructions=params.instructions,
+            references=params.references,
             required_tools=params.required_tools,
             tags=params.tags,
             source=params.source if params.source in ("user_defined", "extracted") else "user_defined",
@@ -303,114 +337,130 @@ class SkillManagerTool(BaseTool):
         )
         self._skill_manager.save_user_skill(self._user_id, skill)
         logger.info(f"Saved skill '{params.name}' for user {self._user_id}")
-        return f"技能 '{params.name}' 已保存并立即生效。"
+        return f"Skill '{params.name}' saved and effective immediately."
 
     def _action_delete(self, name: str) -> str:
         if not name:
-            return "请提供技能名称。"
+            return "Provide a skill name."
         ok = self._skill_manager.delete_user_skill(self._user_id, name)
-        return f"技能 '{name}' 已删除。" if ok else f"技能 '{name}' 不存在。"
+        return f"Skill '{name}' deleted." if ok else f"Skill '{name}' does not exist."
 
     async def _action_ref_set(self, name: str, ref_filename: str, ref_content: str) -> str:
         if not name or not ref_filename or not ref_content:
-            return "ref_set 操作需要 name、ref_filename、ref_content 三个字段。"
-        await ws_call(self._ws, "skill_ref_set", name, ref_filename, ref_content)
+            return "ref_set requires name, ref_filename and ref_content."
+        await ws_call(self._ws, "skill_ref_set", name, normalize_reference_path(ref_filename), ref_content)
         logger.info(f"Set ref '{ref_filename}' for skill '{name}'")
-        return f"已写入参考文件 '{ref_filename}' 到技能 '{name}'。"
+        return f"Wrote reference '{ref_filename}' in skill '{name}'."
 
     async def _action_ref_del(self, name: str, ref_filename: str) -> str:
         if not name or not ref_filename:
-            return "ref_del 操作需要 name 和 ref_filename 字段。"
-        ok = await ws_call(self._ws, "skill_ref_del", name, ref_filename)
-        return f"已删除参考文件 '{ref_filename}'。" if ok else f"参考文件 '{ref_filename}' 不存在。"
+            return "ref_del requires name and ref_filename."
+        ok = await ws_call(self._ws, "skill_ref_del", name, normalize_reference_path(ref_filename))
+        return (
+            f"Deleted reference '{ref_filename}'."
+            if ok
+            else f"Reference file '{ref_filename}' does not exist."
+        )
 
 
-# --- Memory Tool (index + per-type files) ---
-
-MEMORY_TYPES = ("user", "feedback", "project", "reference")
-_INDEX_LINE_RE = re.compile(
-    r"^-\s*\[(?P<type>user|feedback|project|reference)\]\s*"
-    r"(?P<title>.+?)\s*\((?P<date>\d{4}-\d{2}-\d{2})\)\s*"
-    r"(?:—\s*(?P<summary>.+))?$"
-)
-_GET_BODY_MAX_CHARS = 800  # Hard cap on returned detail body (protects token budget)
+# --- Memory Tool (index + workspace files or legacy per-type files) ---
+_GET_BODY_MAX_CHARS = 8000  # Longer bodies can be read through sandbox bash.
 _SUMMARY_MAX_CHARS = 40  # Soft cap on index-line summary length
 
 
-class UpdateMemoryParams(BaseModel):
+class MemoryParams(BaseModel):
     action: Literal["read", "get", "append", "rewrite", "rebuild_index"] = Field(
         description=(
-            "操作类型:\n"
-            "- read: 返回 MEMORY.md 索引（system prompt 已常驻，通常无需显式调用）\n"
-            "- get: 按 title 加载某条记忆的完整正文\n"
-            "- append: 写入一条新记忆（到对应 type 文件 + 索引加一行）\n"
-            "- rewrite: 重写某一个 type 文件（整理/精简时用）\n"
-            "- rebuild_index: 从 4 个 type 文件扫描重建索引（灾难恢复）"
+            "read: Return the index; get: Read an indexed file or grouped section by title; "
+            "append: Register an existing file when file_path is provided, otherwise write grouped content; "
+            "rewrite: Replace one grouped file; rebuild_index: Rescan grouped files and preserve file links."
         )
     )
     title: str | None = Field(
-        default=None,
-        description="记忆条目标题（get / append 必填，同一 type 下应唯一）",
+        default=None, description="Memory title; required for get/append and unique within its type"
     )
     type: Literal["user", "feedback", "project", "reference"] | None = Field(
         default=None,
         description=(
-            "记忆类型: user=用户画像外延, feedback=协作偏好/纠正/确认, "
-            "project=项目动向, reference=外部系统指针。"
-            "append/rewrite 必填，get 可选（留空时从索引推导）"
+            "user: Additional user background; feedback: Collaboration rules and corrections; "
+            "project: Project context; reference: External system pointers. "
+            "Required for append/rewrite; inferred from the index for get when omitted."
         ),
     )
     content: str | None = Field(
+        default=None, description="One entry for append, or the complete grouped file for rewrite"
+    )
+    file_path: str | None = Field(
         default=None,
-        description="正文（append 时为单条正文，rewrite 时为该 type 文件的全部内容）",
+        description=(
+            "Optional for append: an existing UTF-8 file created with execute_code, relative to the user workspace, "
+            "such as memory/customer_acme.md. Only the index is updated; summary is required and content must be omitted. "
+            "Absolute paths and parent traversal are rejected. get resolves this path from the title."
+        ),
     )
     summary: str | None = Field(
         default=None,
-        description=f"索引摘要（仅 append，一行≤{_SUMMARY_MAX_CHARS}字；留空时自动截 content 首行）",
+        description=f"One-line index summary, up to {_SUMMARY_MAX_CHARS} characters. Required for file registration; grouped append defaults to the first body line.",
     )
 
 
-class UpdateMemoryTool(BaseTool):
-    name: str = "update_memory"
+class _MemoryConflict(ValueError):
+    """A concurrent update or duplicate entry needs a user-visible response."""
+
+
+class MemoryTool(BaseTool):
+    name: str = "memory"
     description: str = (
-        "读写长期记忆。MEMORY.md 是索引（system prompt 已加载），详情按需用 get 取。\n"
-        "- read: 返回索引原文（调试用；对话中通常直接看 system prompt）\n"
-        "- get(title, type?): 加载一条记忆的完整正文，body 超 800 字会截断\n"
-        "- append(type, title, content, summary?): 写入新记忆，索引同步更新\n"
-        "- rewrite(type, content): 整段重写某一 type 文件，索引自动重建\n"
-        "- rebuild_index: 从 4 个 type 文件扫出标题重建索引（数据不一致时修复）"
+        "Read and write long-term memory. MEMORY.md is the index already included in the system prompt.\n"
+        "- read: Return the full current index.\n"
+        f"- get(title, type?): Read up to {_GET_BODY_MAX_CHARS} body characters; use sandbox bash for longer files.\n"
+        "- append(type, title, file_path, summary): Register a file created with execute_code; append only its index line.\n"
+        "- append(type, title, content, summary?): Write a grouped entry and update the index.\n"
+        "- rewrite(type, content): Replace an entire grouped file and rebuild its index entries.\n"
+        "- rebuild_index: Rescan grouped entries while preserving independent file links."
     )
-    param_anno = UpdateMemoryParams
+    param_anno = MemoryParams
 
     def __init__(self, user_id: str, workspace: "Workspace" = None, **kwargs):
         super().__init__(**kwargs)
         self._user_id = user_id
         self._ws = workspace or Workspace(user_id)
-        self._got_titles: set[str] = set()  # dedup cache for `get` within a session
 
-    async def __call__(self, params: UpdateMemoryParams) -> str:
+    async def __call__(self, params: MemoryParams) -> str:
         try:
             action = params.action
             if action == "read":
                 return await self._action_read()
             if action == "get":
                 if not params.title:
-                    return "get 操作需要 title。"
+                    return "get action requires title."
                 return await self._action_get(params.title, params.type)
             if action == "append":
-                if not params.type or not params.title or not params.content:
-                    return "append 需要 type + title + content。"
+                if not params.type or not params.title:
+                    return "append requires type + title,and file_path + summary or content."
+                if any(c in params.title for c in "\r\n[]"):
+                    return "title cannot contain newlines or square brackets."
+                if params.file_path is not None:
+                    if params.content is not None:
+                        return "Do not pass content when registering a file; create or edit it with execute_code first."
+                    return await self._action_register_file(
+                        params.type, params.title, params.file_path, params.summary
+                    )
+                if not params.content:
+                    return "append requires content,or an existing file's file_path + summary."
                 return await self._action_append(params.type, params.title, params.content, params.summary)
             if action == "rewrite":
                 if not params.type or not params.content:
-                    return "rewrite 需要 type + content。"
+                    return "rewrite requires type + content."
                 return await self._action_rewrite(params.type, params.content)
             if action == "rebuild_index":
                 return await self._action_rebuild_index()
-            return f"未知操作: {action}"
+            return f"Unknown action: {action}"
+        except _MemoryConflict as e:
+            return str(e)
         except Exception as e:
-            logger.error(f"update_memory {params.action} failed: {e}")
-            return f"操作失败: {str(e)}"
+            logger.error(f"memory {params.action} failed: {e}")
+            return f"Operation failed: {str(e)}"
 
     # ── Shared I/O helpers ─────────────────────────────────
 
@@ -424,12 +474,21 @@ class UpdateMemoryTool(BaseTool):
         body = _FRONTMATTER_RE.sub("", raw, count=1).strip()
         return frontmatter, body
 
-    async def _write_file(self, name: str, body: str, default_description: str = "") -> None:
-        """Write body (with existing or default frontmatter) back to a prompt file."""
-        frontmatter, _ = await self._read_file(name)
-        if not frontmatter:
-            frontmatter = f"---\nname: {name}\ndescription: {default_description}\n---\n"
-        await ws_call(self._ws, "write_prompt", name, frontmatter + "\n" + body.rstrip() + "\n")
+    async def _update_file(
+        self, name: str, transform: Callable[[str], str], default_description: str = ""
+    ) -> str:
+        """Transform the latest body atomically, preserving its frontmatter."""
+
+        def update(raw: str) -> str:
+            m = _FRONTMATTER_RE.match(raw)
+            frontmatter = (
+                m.group(1) if m else (f"---\nname: {name}\ndescription: {default_description}\n---\n")
+            )
+            body = _FRONTMATTER_RE.sub("", raw, count=1).strip()
+            return frontmatter + "\n" + transform(body).rstrip() + "\n"
+
+        raw = await ws_call(self._ws, "update_prompt", name, update)
+        return _FRONTMATTER_RE.sub("", raw, count=1).strip()
 
     @staticmethod
     def _parse_entries(body: str) -> list[tuple[str, str, str]]:
@@ -456,146 +515,251 @@ class UpdateMemoryTool(BaseTool):
     async def _action_read(self) -> str:
         _, body = await self._read_file("MEMORY")
         if not body:
-            return "记忆索引为空。"
-        return body
+            return "Memory index is empty."
+        notice = memory_index_notice(body)
+        return body + (f"\n\n[Index maintenance] {notice}" if notice else "")
+
+    @staticmethod
+    def _format_body(body: str, file_path: str) -> str:
+        if len(body) <= _GET_BODY_MAX_CHARS:
+            return body
+        command = json.dumps(f"cat -- {shlex.quote(file_path)}", ensure_ascii=False)
+        return (
+            body[:_GET_BODY_MAX_CHARS]
+            + f"\n\n... (Truncated: body length {len(body)} characters; returning the first {_GET_BODY_MAX_CHARS} characters. "
+            f"Source path relative to workspace: {file_path}; read additional content with sandbox bash, "
+            f'for example execute_code(language="bash", code={command}), or use sed to read selected lines.)'
+        )
 
     async def _action_get(self, title: str, mem_type: str | None) -> str:
-        # Dedup: same title already fetched this session
-        if title in self._got_titles:
-            return f"记忆 '{title}' 已在本会话中加载过，请在历史的 tool_result 里回看。"
+        title = title.strip()
+        _, index_body = await self._read_file("MEMORY")
+        matches = [
+            entry
+            for entry in parse_memory_index(index_body)
+            if entry.title == title and (mem_type is None or entry.type == mem_type)
+        ]
+        if len(matches) > 1:
+            return f"Multiple index entries have title='{title}' memories. Specify type or remove duplicate index entries."
+        entry = matches[0] if matches else None
+        if entry is not None and entry.file_path is not None:
+            body = await ws_call(self._ws, "file_read", entry.file_path)
+            if body is None:
+                return f"Memory file '{entry.file_path}' does not exist; use execute_code to restore the file or repair the index."
+            truncated = self._format_body(body, entry.file_path)
+            return f"## {title} ({entry.date}) [type={entry.type}]\nFile: {entry.file_path}\n\n{truncated}"
 
-        # Resolve type from index if not provided
         if mem_type is None:
-            mem_type = await self._lookup_type_from_index(title)
-            if mem_type is None:
-                return f"在索引里找不到 title='{title}' 的记忆。先 read 索引确认名称。"
+            if entry is None:
+                return f"No index entry found for title='{title}' memories. First read the index to verify the title."
+            mem_type = entry.type
 
         if mem_type not in MEMORY_TYPES:
-            return f"未知 type: {mem_type}，合法值: {MEMORY_TYPES}"
+            return f"Unknown type: {mem_type}; valid values: {MEMORY_TYPES}"
 
         _, body = await self._read_file(f"MEMORY_{mem_type}")
         entries = self._parse_entries(body)
         for t, date, entry_body in entries:
             if t == title:
-                truncated = entry_body
-                if len(truncated) > _GET_BODY_MAX_CHARS:
-                    truncated = (
-                        truncated[:_GET_BODY_MAX_CHARS] + f"\n\n... (已截断，完整内容见 MEMORY_{mem_type}.md)"
-                    )
-                self._got_titles.add(title)
+                truncated = self._format_body(entry_body, f"prompts/MEMORY_{mem_type}.md")
                 return f"## {title} ({date}) [type={mem_type}]\n\n{truncated}"
 
-        return f"MEMORY_{mem_type}.md 里找不到 section '## {title}'。索引可能过期，建议 rebuild_index。"
+        return f"MEMORY_{mem_type}.md has no section '## {title}'. The index may be stale; try rebuild_index."
+
+    async def _action_register_file(
+        self, mem_type: str, title: str, file_path: str, summary: str | None
+    ) -> str:
+        title = title.strip()
+        if not title or not summary or not summary.strip():
+            return "File registration requires nonempty title and summary."
+        if mem_type not in MEMORY_TYPES:
+            return f"Unknown type: {mem_type}; valid values: {MEMORY_TYPES}"
+        file_path = file_path.replace("\\", "/")
+        body = await ws_call(self._ws, "file_read", file_path)
+        if body is None:
+            return f"File '{file_path}' does not exist. Create it with execute_code before registration."
+        if not body.strip():
+            return "Memory file is empty. Write content before registering the file."
+        _, typed_body = await self._read_file(f"MEMORY_{mem_type}")
+        if any(t == title for t, _, _ in self._parse_entries(typed_body)):
+            return f"[{mem_type}] an entry with this title already exists: '{title}'. Choose another title."
+        summary = summary.strip().splitlines()[0][:_SUMMARY_MAX_CHARS]
+        entry = MemoryIndexEntry(
+            type=mem_type,
+            title=title,
+            date=datetime.now().strftime("%Y-%m-%d"),
+            summary=summary,
+            file_path=file_path,
+        )
+        index_line = entry.index_line()
+
+        def append_index(index_body: str) -> str:
+            entries = parse_memory_index(index_body)
+            if any(entry.file_path == file_path for entry in entries):
+                raise _MemoryConflict(
+                    f"File '{file_path}' Registered; no duplicate index entry is needed. After body edits, get reads the latest content."
+                )
+            if any(entry.type == mem_type and entry.title == title for entry in entries):
+                raise _MemoryConflict(
+                    f"[{mem_type}] an entry with this title already exists: '{title}'. Choose another title."
+                )
+            return f"{index_body}\n{index_line}".strip()
+
+        new_body = await self._update_file(
+            "MEMORY", append_index, default_description="Long-term memory index"
+        )
+        notice = memory_index_notice(new_body)
+        return f"Registered memory file and updated index: {index_line}" + (
+            f"\n\n[Index maintenance] {notice}" if notice else ""
+        )
 
     async def _action_append(self, mem_type: str, title: str, content: str, summary: str | None) -> str:
         if mem_type not in MEMORY_TYPES:
-            return f"未知 type: {mem_type}，合法值: {MEMORY_TYPES}"
+            return f"Unknown type: {mem_type}; valid values: {MEMORY_TYPES}"
         title = title.strip()
         content = content.strip()
         if not title or not content:
-            return "title 和 content 不能为空。"
+            return "title and content must not be empty."
 
         date = datetime.now().strftime("%Y-%m-%d")
         summary = (summary or content.splitlines()[0]).strip()
+        summary = summary.splitlines()[0]
         if len(summary) > _SUMMARY_MAX_CHARS:
             summary = summary[:_SUMMARY_MAX_CHARS].rstrip() + "…"
 
         # 1) Append to typed file (dedup: if title already exists, reject)
-        _, typed_body = await self._read_file(f"MEMORY_{mem_type}")
-        existing = {t for t, _, _ in self._parse_entries(typed_body)}
+        _, index_body = await self._read_file("MEMORY")
+        existing = {entry.title for entry in parse_memory_index(index_body) if entry.type == mem_type}
         if title in existing:
             return (
-                f"MEMORY_{mem_type}.md 已存在同名条目 '{title}'。"
-                "如需更新，先 rewrite 整段；如需追加到同一主题，请换个 title。"
+                f"[{mem_type}] an entry with this title already exists '{title}'."
+                "Edit independent files with execute_code; update grouped entries with rewrite. Use another title for a new topic."
             )
         new_entry = f"## {title} ({date})\n\n{content}\n"
-        new_typed_body = (typed_body + "\n\n" + new_entry).strip() if typed_body else new_entry
-        await self._write_file(
+
+        def append_typed(typed_body: str) -> str:
+            if any(t == title for t, _, _ in self._parse_entries(typed_body)):
+                raise _MemoryConflict(
+                    f"[{mem_type}] an entry with this title already exists: '{title}'. Update it with rewrite or choose another title."
+                )
+            return (typed_body + "\n\n" + new_entry).strip()
+
+        await self._update_file(
             f"MEMORY_{mem_type}",
-            new_typed_body,
-            default_description=f"{mem_type} 类型的长期记忆条目",
+            append_typed,
+            default_description=f"{mem_type} type long-term memory entries",
         )
 
         # 2) Append a line to MEMORY.md index
-        _, index_body = await self._read_file("MEMORY")
         index_line = f"- [{mem_type}] {title} ({date}) — {summary}"
-        new_index_body = (index_body + "\n" + index_line).strip() if index_body else index_line
-        await self._write_file("MEMORY", new_index_body, default_description="长期记忆索引")
+
+        def append_index(index_body: str) -> str:
+            for entry in parse_memory_index(index_body):
+                if entry.type == mem_type and entry.title == title:
+                    if entry.file_path is not None:
+                        raise _MemoryConflict(
+                            f"[{mem_type}] an independent file with this title already exists,Choose another title and reconcile the grouped entry."
+                        )
+                    # A concurrent rebuild may already have indexed this section.
+                    return index_body
+            return (index_body + "\n" + index_line).strip()
+
+        new_index_body = await self._update_file(
+            "MEMORY", append_index, default_description="Long-term memory index"
+        )
 
         logger.info(f"Appended memory [{mem_type}] '{title}' for user {self._user_id}")
-        return f"已写入 MEMORY_{mem_type}.md 并更新索引：{index_line}"
+        notice = memory_index_notice(new_index_body)
+        return f"Wrote MEMORY_{mem_type}.md and updated index: {index_line}" + (
+            f"\n\n[Index maintenance] {notice}" if notice else ""
+        )
 
     async def _action_rewrite(self, mem_type: str, content: str) -> str:
         if mem_type not in MEMORY_TYPES:
-            return f"未知 type: {mem_type}，合法值: {MEMORY_TYPES}"
+            return f"Unknown type: {mem_type}; valid values: {MEMORY_TYPES}"
         content = content.strip()
         if not content:
-            return "content 不能为空。"
+            return "content must not be empty."
 
-        await self._write_file(
+        _, expected_body = await self._read_file(f"MEMORY_{mem_type}")
+
+        def replace_body(body: str) -> str:
+            if body != expected_body:
+                raise _MemoryConflict(
+                    "Grouped memory was changed by another operation,reread the file before rewrite."
+                )
+            return content
+
+        await self._update_file(
             f"MEMORY_{mem_type}",
-            content,
-            default_description=f"{mem_type} 类型的长期记忆条目",
+            replace_body,
+            default_description=f"{mem_type} type long-term memory entries",
         )
-        await self._action_rebuild_index(silent=True)
+        notice = await self._action_rebuild_index(silent=True)
 
         logger.info(f"Rewrote MEMORY_{mem_type}.md for user {self._user_id}")
-        return f"MEMORY_{mem_type}.md 已重写，索引已同步。"
+        return f"MEMORY_{mem_type}.md rewritten,index synchronized." + notice
 
     async def _action_rebuild_index(self, silent: bool = False) -> str:
-        """Scan all 4 typed files and regenerate MEMORY.md index from scratch."""
-        lines: list[str] = []
-        for mem_type in MEMORY_TYPES:
-            _, typed_body = await self._read_file(f"MEMORY_{mem_type}")
-            for title, date, entry_body in self._parse_entries(typed_body):
-                summary = entry_body.splitlines()[0].strip() if entry_body else ""
-                if len(summary) > _SUMMARY_MAX_CHARS:
-                    summary = summary[:_SUMMARY_MAX_CHARS].rstrip() + "…"
-                lines.append(f"- [{mem_type}] {title} ({date}) — {summary}")
+        """Rebuild typed entries while retaining registered workspace-file links."""
 
-        body = "\n".join(lines) if lines else ""
-        await self._write_file("MEMORY", body, default_description="长期记忆索引")
+        def rebuild(old_index: str) -> str:
+            lines = [
+                entry.index_line() for entry in parse_memory_index(old_index) if entry.file_path is not None
+            ]
+            for mem_type in MEMORY_TYPES:
+                raw = self._ws.read_prompt(f"MEMORY_{mem_type}") or ""
+                typed_body = _FRONTMATTER_RE.sub("", raw, count=1).strip()
+                for title, date, entry_body in self._parse_entries(typed_body):
+                    summary = entry_body.splitlines()[0].strip() if entry_body else ""
+                    if len(summary) > _SUMMARY_MAX_CHARS:
+                        summary = summary[:_SUMMARY_MAX_CHARS].rstrip() + "…"
+                    lines.append(f"- [{mem_type}] {title} ({date}) — {summary}")
+            return "\n".join(lines)
+
+        body = await self._update_file("MEMORY", rebuild, default_description="Long-term memory index")
+        count = len(parse_memory_index(body))
+        notice = memory_index_notice(body)
+        suffix = f"\n\n[Index maintenance] {notice}" if notice else ""
         if silent:
-            return ""
-        logger.info(f"Rebuilt memory index for user {self._user_id}: {len(lines)} entries")
-        return f"索引已重建，共 {len(lines)} 条记忆。"
+            return suffix
+        logger.info(f"Rebuilt memory index for user {self._user_id}: {count} entries")
+        return f"Index rebuilt: {count} memories." + suffix
 
-    async def _lookup_type_from_index(self, title: str) -> str | None:
-        """Scan MEMORY.md index for a line matching the given title; return its type."""
-        _, body = await self._read_file("MEMORY")
-        for line in body.splitlines():
-            m = _INDEX_LINE_RE.match(line.strip())
-            if m and m.group("title").strip() == title:
-                return m.group("type")
-        return None
+
+# Keep Python import compatibility; only the new names are exposed to the LLM.
+UpdateMemoryTool = MemoryTool
+UpdateMemoryParams = MemoryParams
+SkillManagerTool = SkillTool
+SkillManagerParams = SkillParams
 
 
 # --- User Profile helpers ---
 
 _FRONTMATTER_RE = re.compile(r"^(---\s*\n.*?\n---\s*\n)", re.DOTALL)
 
-_BASIC_SINGLE = ["姓名", "称呼", "时区", "工作区"]
-_BASIC_MULTI = ["社交账号"]
+_BASIC_SINGLE = ["Name", "Nickname", "Timezone", "Workspace"]
+_BASIC_MULTI = ["Social accounts"]
 _TRADE_SINGLE = [
-    "主营产品",
-    "公司名称",
-    "公司网址",
-    "公司规模",
-    "当前主要阶段/目标",
-    "主要行业",
-    "目标市场",
-    "平台偏好",
-    "风格偏好",
-    "商务策略偏好",
+    "Main products",
+    "Company name",
+    "Company website",
+    "Company scale",
+    "Current stage/goals",
+    "Main industry",
+    "Target markets",
+    "Platform preferences",
+    "Style preferences",
+    "Business strategy",
 ]
-_GENERAL_MULTI = ["背景", "偏好"]
+_GENERAL_MULTI = ["Background", "Preferences"]
 
 _SINGLE_FIELDS = _BASIC_SINGLE + _TRADE_SINGLE
 _MULTI_FIELDS = _BASIC_MULTI + _GENERAL_MULTI
 _ALL_FIELDS = _SINGLE_FIELDS + _MULTI_FIELDS
 
-# 逗号分隔列表字段：append 时追加新值到已有列表，自动去重
-_LIST_FIELDS = {"主营产品", "目标市场", "平台偏好"}
+# Append new comma-separated values and deduplicate them.
+_LIST_FIELDS = {"Main products", "Target markets", "Platform preferences"}
 
 
 def _parse_user_fields(body: str) -> dict[str, str]:
@@ -604,6 +768,21 @@ def _parse_user_fields(body: str) -> dict[str, str]:
     if not body.strip():
         return fields
 
+    # Earlier templates used localized labels in the same fixed field order.
+    # Preserve existing values when upgrading a complete legacy profile. Never
+    # guess a partial/custom schema and silently discard unrecognized data.
+    legacy_labels = re.compile(r"^[\u3400-\u9fff/]+[:\uFF1A]", re.MULTILINE)
+    legacy_matches = list(legacy_labels.finditer(body))
+    known_labels = sum(bool(re.search(rf"^{re.escape(label)}:", body, re.MULTILINE)) for label in _ALL_FIELDS)
+    if legacy_matches and known_labels != len(_ALL_FIELDS):
+        ordered_labels = _BASIC_SINGLE + _BASIC_MULTI + _TRADE_SINGLE + _GENERAL_MULTI
+        if len(legacy_matches) != len(ordered_labels) or known_labels:
+            raise ValueError(
+                "Legacy profile has a partial or custom schema; migrate its labels before updating."
+            )
+        labels = iter(ordered_labels)
+        body = legacy_labels.sub(lambda _match: next(labels) + ":", body)
+
     lines = body.split("\n")
     current_field: str | None = None
     current_lines: list[str] = []
@@ -611,7 +790,7 @@ def _parse_user_fields(body: str) -> dict[str, str]:
     for line in lines:
         # Skip section headers and hint lines
         stripped = line.strip()
-        if stripped.startswith("## ") or (stripped.startswith("（") and stripped.endswith("）")):
+        if stripped.startswith("## ") or (stripped.startswith("(") and stripped.endswith(")")):
             # Save previous field before skipping
             if current_field is not None:
                 fields[current_field] = "\n".join(current_lines).strip()
@@ -622,7 +801,7 @@ def _parse_user_fields(body: str) -> dict[str, str]:
         # Check if this line starts a new field
         matched = None
         for f in _ALL_FIELDS:
-            if line.startswith(f"{f}："):
+            if line.startswith(f"{f}:"):
                 matched = f
                 break
 
@@ -633,8 +812,8 @@ def _parse_user_fields(body: str) -> dict[str, str]:
 
             current_field = matched
             if matched in _SINGLE_FIELDS:
-                # Single-line: value is on the same line after "字段名："
-                value = line[len(f"{matched}：") :].strip()
+                # Single-line: value is on the same line after "Field name:"
+                value = line[len(f"{matched}:") :].strip()
                 current_lines = [value] if value else []
             else:
                 # Multi-line: value starts from next line
@@ -671,11 +850,7 @@ async def _append_user_profile_fields(
     fields = _parse_user_fields(body)
 
     # Determine multi-line fields that need special handling
-    multi_line_fields = {
-        "background": "背景",
-        "preferences": "偏好",
-        "social_accounts": "社交账号",
-    }
+    multi_line_fields = set(_BASIC_MULTI + _GENERAL_MULTI)
 
     # Process each update
     for key, value in valid_updates.items():
@@ -687,14 +862,14 @@ async def _append_user_profile_fields(
             # Comma-separated list field: deduplicated append
             existing = fields.get(key, "").strip()
             if existing:
-                existing_items = [i.strip() for i in re.split(r"[,，、]", existing) if i.strip()]
-                new_items = [i.strip() for i in re.split(r"[,，、]", value) if i.strip()]
+                existing_items = [i.strip() for i in re.split(r"[,\uFF0C\u3001]", existing) if i.strip()]
+                new_items = [i.strip() for i in re.split(r"[,\uFF0C\u3001]", value) if i.strip()]
                 seen = set(existing_items)
                 for item in new_items:
                     if item not in seen:
                         existing_items.append(item)
                         seen.add(item)
-                fields[key] = "、".join(existing_items)
+                fields[key] = ", ".join(existing_items)
             else:
                 fields[key] = value
         elif key in multi_line_fields and multi_field_append:
@@ -725,33 +900,33 @@ def _serialize_user_fields(fields: dict[str, str]) -> str:
     """Serialize {field_name: value} dict back to USER.md body text with section headers."""
     parts: list[str] = []
 
-    # 基本信息
-    parts.append("## 基本信息")
+    # Basic information
+    parts.append("## Basic information")
     for f in _BASIC_SINGLE:
         value = fields.get(f, "")
-        parts.append(f"{f}： {value}" if value else f"{f}：")
+        parts.append(f"{f}: {value}" if value else f"{f}:")
     for f in _BASIC_MULTI:
         value = fields.get(f, "")
         parts.append("")
-        parts.append(f"{f}：")
+        parts.append(f"{f}:")
         if value:
             parts.append(value)
 
-    # 外贸业务信息
+    # Business information
     parts.append("")
     parts.append("")
-    parts.append("## 外贸业务信息")
+    parts.append("## Business information")
     for f in _TRADE_SINGLE:
         value = fields.get(f, "")
-        parts.append(f"{f}： {value}" if value else f"{f}：")
+        parts.append(f"{f}: {value}" if value else f"{f}:")
 
-    # 通用信息
+    # General information
     parts.append("")
     parts.append("")
-    parts.append("## 通用信息")
+    parts.append("## General information")
     for f in _GENERAL_MULTI:
         value = fields.get(f, "")
-        parts.append(f"{f}：")
+        parts.append(f"{f}:")
         if value:
             parts.append(value)
         parts.append("")
@@ -803,26 +978,30 @@ class ScheduleManagerParams(BaseModel):
     """Manage scheduled tasks."""
 
     action: Literal["create", "list", "delete"] = Field(
-        description="操作类型: create=创建定时任务, list=列出所有任务, delete=删除任务"
+        description="Action: create=Create a scheduled task, list=List all tasks, delete=Delete task"
     )
-    name: str | None = Field(default=None, description="任务名称（create 时必填）")
-    skill: str | None = Field(default=None, description="关联的技能名称（可选）")
-    skill_desc: str | None = Field(default=None, description="技能简短描述（可选）")
-    prompt: str | None = Field(default=None, description="定时执行时发送给 agent 的提示词（create 时必填）")
-    hour: int | None = Field(default=8, description="执行时间-小时（0-23，默认8点）")
-    minute: int | None = Field(default=0, description="执行时间-分钟（0-59，默认0分）")
-    repeat: str | None = Field(default="daily", description="重复方式: daily=每天, weekly=每周, once=仅一次")
-    task_id: str | None = Field(default=None, description="任务ID（delete 时必填）")
+    name: str | None = Field(default=None, description="Task name; required for create")
+    skill: str | None = Field(default=None, description="Associated skill name(optional)")
+    skill_desc: str | None = Field(default=None, description="Short skill description(optional)")
+    prompt: str | None = Field(
+        default=None, description="Prompt sent to the agent at the scheduled time; required for create"
+    )
+    hour: int | None = Field(default=8, description="Execution time-hour(0-23,default 8)")
+    minute: int | None = Field(default=0, description="Execution time-minutes(0-59,default 0)")
+    repeat: str | None = Field(
+        default="daily", description="Repeat schedule: daily=Daily, weekly=Weekly, once=Once"
+    )
+    task_id: str | None = Field(default=None, description="Task ID; required for delete")
 
 
 class ScheduleManagerTool(BaseTool):
     name: str = "schedule_manager"
     description: str = (
-        "创建、查看、删除定时任务。当用户要求定期/每天/每周自动执行某件事时使用此工具。\n"
-        "- create: 创建定时任务（需要 name, prompt, hour, minute）\n"
-        "- list: 列出当前所有定时任务\n"
-        "- delete: 删除指定任务（需要 task_id）\n"
-        "任务创建后会推送到用户前端，由前端定时触发执行。"
+        "Create, view or delete scheduled tasks for recurring automation.\n"
+        "- create: Create a scheduled task(requires name, prompt, hour, minute)\n"
+        "- list: List current scheduled tasks\n"
+        "- delete: Delete a task(requires task_id)\n"
+        "Created tasks are sent to the interface, which triggers execution at the scheduled time."
     )
     param_anno = ScheduleManagerParams
 
@@ -836,7 +1015,7 @@ class ScheduleManagerTool(BaseTool):
 
         if params.action == "create":
             if not params.name or not params.prompt:
-                return "创建任务需要 name 和 prompt 参数。"
+                return "Creating a task requires name and prompt parameters."
             task = {
                 "id": f"t_{int(time.time())}",
                 "name": params.name,
@@ -856,10 +1035,10 @@ class ScheduleManagerTool(BaseTool):
 
         elif params.action == "delete":
             if not params.task_id:
-                return "删除任务需要 task_id 参数。"
+                return "Deleting a task requires task_id parameters."
             return json.dumps({"action": "delete", "task_id": params.task_id}, ensure_ascii=False)
 
-        return f"未知操作: {params.action}"
+        return f"Unknown action: {params.action}"
 
 
 # --- Parent History Tool (for sub-agents) ---
@@ -870,19 +1049,19 @@ class ParentHistoryParams(BaseModel):
 
     action: Literal["tail", "full", "search", "last_user"] = Field(
         description=(
-            "tail: 最近 N 条消息；"
-            "full: 完整历史（会按长度截断）；"
-            "search: 用 keyword 做不区分大小写的子串过滤；"
-            "last_user: 仅返回最近一条用户消息"
+            "tail: latest N messages;"
+            "full: Full history(truncated to the length limit);"
+            "search: Match keyword as a case-insensitive substring;"
+            "last_user: Return only the latest user message"
         ),
     )
     n: int = Field(
         default=5,
-        description="action=tail 时返回的消息数（默认 5，上限 30）",
+        description="action=tail number of messages to return(default 5,limit 30)",
     )
     keyword: str = Field(
         default="",
-        description="action=search 时的关键词",
+        description="action=search search keyword",
     )
 
 
@@ -901,12 +1080,12 @@ class ParentHistoryTool(BaseTool):
 
     name: str = "parent_history"
     description: str = (
-        "按需查看主 agent 的对话历史。主 agent 启动子任务前**未必**会把所有背景写进 task/context，"
-        "当你需要原始上下文（用户说过什么、之前调用过什么工具、已贴过的 URL/代码/错误信息等）时使用此工具。\n"
-        "- action=tail, n=5：最近 5 条消息\n"
-        "- action=full：完整历史（会按长度截断）\n"
-        "- action=search, keyword=xxx：找包含 xxx 的消息\n"
-        "- action=last_user：最近一条用户消息（适合快速确认当前意图）"
+        "Inspect parent agent conversation history. The parent may omit background when starting a subtask. "
+        "Read original user messages, previous tool calls, URLs, code or error messages when needed.\n"
+        "- action=tail, n=5:latest 5 messages\n"
+        "- action=full:Full history(truncated to the length limit)\n"
+        "- action=search, keyword=xxx:Find messages containing xxx\n"
+        "- action=last_user:Latest user message(useful for checking current intent)"
     )
     param_anno = ParentHistoryParams
 
@@ -920,10 +1099,10 @@ class ParentHistoryTool(BaseTool):
             history = list(self._fn() or [])
         except Exception as e:
             logger.warning(f"ParentHistoryTool fetch failed: {e}")
-            return f"无法读取主 agent 历史: {e}"
+            return f"Cannot read parent agent History: {e}"
 
         if not history:
-            return "主 agent 历史为空。"
+            return "Parent agent history is empty."
 
         if params.action == "tail":
             n = max(1, min(int(params.n or 5), 30))
@@ -935,24 +1114,24 @@ class ParentHistoryTool(BaseTool):
         if params.action == "search":
             kw = (params.keyword or "").strip().lower()
             if not kw:
-                return "search 需要提供 keyword。"
+                return "search requires keyword."
             matches = [m for m in history if kw in str(m.get("content", "")).lower()]
             if not matches:
-                return f"未找到包含 {kw!r} 的消息。"
+                return f"No messages contain {kw!r} messages."
             return self._format(matches)
 
         if params.action == "last_user":
             for m in reversed(history):
                 if m.get("role") == "user":
                     return str(m.get("content", ""))[:_PARENT_HIST_MAX_CHARS]
-            return "主 agent 历史中没有用户消息。"
+            return "Parent agent history has no user messages."
 
-        return f"未知 action: {params.action}"
+        return f"Unknown action: {params.action}"
 
     @staticmethod
     def _format(messages: list) -> str:
         if not messages:
-            return "(无匹配消息)"
+            return "(No matching messages)"
         # Keep only the most recent N to bound token cost
         tail = messages[-_PARENT_HIST_MAX_MSGS:]
         lines = []
@@ -960,13 +1139,13 @@ class ParentHistoryTool(BaseTool):
             role = m.get("role", "unknown")
             content = m.get("content", "")
             if content is None:
-                content = "[工具调用]"
+                content = "[Tool call]"
             text = str(content)[:_PARENT_HIST_PER_MSG_CHARS]
             lines.append(f"[{role}] {text}")
         result = "\n\n".join(lines)
         if len(result) > _PARENT_HIST_MAX_CHARS:
             result = result[:_PARENT_HIST_MAX_CHARS] + "\n... [history truncated]"
-        header = f"主 agent 历史（共 {len(messages)} 条，展示 {len(tail)} 条）:\n\n"
+        header = f"Parent agent history ({len(messages)} messages total, showing {len(tail)}):\n\n"
         return header + result
 
 
@@ -976,13 +1155,13 @@ class ParentHistoryTool(BaseTool):
 class SubAgentParams(BaseModel):
     """Parameters for invoking a sub-agent."""
 
-    task: str = Field(description="子代理要执行的任务描述")
+    task: str = Field(description="Task for the sub-agent")
     agent_type: str = Field(
-        description="子代理类型（对应 configs/agents/ 下的 .md 文件名）",
+        description="Sub-agent type matching a .md filename under configs/agents/",
     )
     context: str | None = Field(
         default=None,
-        description="传递给子代理的额外上下文信息",
+        description="Additional context for the sub-agent",
     )
 
 
@@ -995,7 +1174,7 @@ class SubAgentTool(BaseTool):
     """
 
     name: str = "sub_agent"
-    description: str = "调用子代理执行独立任务。"
+    description: str = "Delegate an independent task to a sub-agent."
     param_anno = SubAgentParams
 
     def __init__(self, user_id: str = "", workspace=None, parent_history_fn=None, **kwargs):
@@ -1013,7 +1192,7 @@ class SubAgentTool(BaseTool):
             agents = list_agent_types()
             if agents:
                 lines = "\n".join(f"- {a.name}: {a.description}" for a in agents)
-                self.description = f"调用子代理执行独立任务。可用类型：\n{lines}"
+                self.description = f"Delegate an independent task to a sub-agent.Available types:\n{lines}"
         except Exception:
             pass
 
@@ -1049,4 +1228,13 @@ class SubAgentTool(BaseTool):
             logger.error(f"SubAgentTool error: {e}")
             return json.dumps({"error": str(e)}, ensure_ascii=False)
 
-        return final_text[:4000] if final_text else "子代理执行完成"
+        if "[SKILL_PROPOSAL]" in final_text:
+            self._sub_events.append({"code": 12, "content": final_text})
+            report = re.sub(r"\[SKILL_PROPOSAL\][\s\S]*?\[/SKILL_PROPOSAL\]", "", final_text).strip()
+            if "[SKILL_PROPOSAL]" in report:
+                return "Sub-agent skill proposal output is incomplete. A retry notice was shown to the user; do not save incomplete proposals."
+            return (
+                report[:3000]
+                + "\n\nThe complete skill proposal was sent to the user confirmation card. Wait for user review and confirmation; do not repeat the proposal or reference bodies."
+            ).strip()
+        return final_text[:4000] if final_text else "Sub-agent execution completed"

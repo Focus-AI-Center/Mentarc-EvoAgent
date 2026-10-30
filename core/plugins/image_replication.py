@@ -39,9 +39,9 @@ _RATIO_TO_SIZE = {
 }
 
 SUITE_PROMPT = (
-    "生成四张适合电商展示的图像，保持原产品设计细节完全不变，"
-    "85%产品主体居中白底图展示，2个不同的角度图展示，细节图展示，"
-    "多种静态展示方式，画面干净高清，禁止出现水印文字。"
+    "Generate four ecommerce product images while preserving every original product design detail. "
+    "Use a centered white-background view with the product filling 85% of the frame, two different angles and a detail view. "
+    "Provide varied static views, clean high resolution, and no watermarks or text."
 )
 
 REPLICATION_PROMPT = (
@@ -125,10 +125,14 @@ async def _load_image(source: str, user_id: str = "", workspace=None) -> tuple[s
 
 
 class ImageReplicationParams(BaseModel):
-    competitor_photo_url: str = Field(default="", description="竞品图片 URL（单图复刻时必填）")
-    user_product_image: str = Field(description="用户产品图 URL")
-    max_images: int = Field(default=1, description="生成图片数量（1=单图复刻，4=套图生成）")
-    aspect_ratio: str = Field(default="1:1", description="输出宽高比")
+    competitor_photo_url: str = Field(
+        default="", description="Competitor image URL (required for single-image replication)"
+    )
+    user_product_image: str = Field(description="User product image URL")
+    max_images: int = Field(
+        default=1, description="Image count: 1 for single-image replication, 4 for an ecommerce set"
+    )
+    aspect_ratio: str = Field(default="1:1", description="Output aspect ratio")
 
 
 @register_plugin(
@@ -144,9 +148,9 @@ class ImageReplicationParams(BaseModel):
 class ImageReplicationTool(BaseTool):
     name: str = "image_replication"
     description: str = (
-        "产品图片复刻工具。两种模式：\n"
-        "1. 单图风格复刻（max_images=1）：分析竞品图风格，生成同风格的用户产品图\n"
-        "2. 电商套图（max_images=4）：生成 4 张电商展示图"
+        "Replicate product image styles. Two modes:\n"
+        "1. Single-image replication (max_images=1): analyze a competitor style and render the user product in that style\n"
+        "2. Ecommerce set (max_images=4): generate four product display images"
     )
     param_anno = ImageReplicationParams
     user_id: str = ""
@@ -215,7 +219,7 @@ class ImageReplicationTool(BaseTool):
         """Single-image style replication from competitor photo."""
         try:
             if not params.competitor_photo_url:
-                return json.dumps({"error": "单图复刻需要 competitor_photo_url"})
+                return json.dumps({"error": "Single-image replication requires competitor_photo_url"})
 
             # Analyze competitor style
             style_fields, raw_analysis = await _analyze_and_extract(params.competitor_photo_url)

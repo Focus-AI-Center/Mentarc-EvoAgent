@@ -14,7 +14,7 @@ from core.plugins.base import PluginMeta, register_plugin
 from utils.image_upload import upload_image
 from utils.logger import logger
 
-# Doubao API (火山引擎 / OpenAI-compatible)
+# Doubao API (Volcengine / OpenAI-compatible)
 DOUBAO_API_BASE = os.getenv("DOUBAO_API_BASE", "https://ark.cn-beijing.volces.com/api/v3")
 _MAX_RETRIES = 2
 _TIMEOUT = 300.0
@@ -39,8 +39,8 @@ def _aspect_ratio_to_size(aspect_ratio: str) -> str:
 
 
 class ImageGenerationParams(BaseModel):
-    prompt: str = Field(description="英文图片描述提示词")
-    aspect_ratio: str = Field(default="16:9", description="宽高比 (16:9, 4:3, 1:1, 9:16, etc.)")
+    prompt: str = Field(description="English image description")
+    aspect_ratio: str = Field(default="16:9", description="Aspect ratio (16:9, 4:3, 1:1, 9:16, etc.)")
 
 
 @register_plugin(
@@ -55,7 +55,9 @@ class ImageGenerationParams(BaseModel):
 )
 class ImageGenerationTool(BaseTool):
     name: str = "image_generation"
-    description: str = "根据英文提示词生成图片。提示词建议：【艺术风格】+【主体描述】+【文字排版】。"
+    description: str = (
+        "Generate images from English prompts. Describe the art style, subject and text layout."
+    )
     param_anno = ImageGenerationParams
     user_id: str = ""
 
@@ -105,7 +107,7 @@ class ImageGenerationTool(BaseTool):
                         "image_path": img_url,
                         "prompt": params.prompt,
                         "aspect_ratio": params.aspect_ratio,
-                        "markdown": f"![生成图片]({img_url})",
+                        "markdown": f"![Generate images]({img_url})",
                     },
                     ensure_ascii=False,
                 )

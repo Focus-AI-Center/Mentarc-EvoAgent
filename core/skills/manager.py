@@ -4,6 +4,7 @@ from datetime import datetime
 
 from core.skills import Skill, skill_from_md, skill_to_md
 from utils.logger import logger
+from utils.skill_references import normalize_references, with_reference_links
 from utils.workspace import Workspace
 
 
@@ -52,12 +53,15 @@ class SkillManager:
 
     def save_user_skill(self, user_id: str, skill: Skill) -> None:
         """Save a skill to the user's skill set."""
+        references = normalize_references(skill.references)
+        skill.references = references
+        skill.instructions = with_reference_links(skill.instructions, references)
         skill.is_builtin = False
         skill.created_by = user_id
         ws = self._ws(user_id)
-        ws.skill_set(skill.name, skill_to_md(skill))
-        for filename, content in skill.references.items():
+        for filename, content in references.items():
             ws.skill_ref_set(skill.name, filename, content)
+        ws.skill_set(skill.name, skill_to_md(skill))
 
     def delete_user_skill(self, user_id: str, skill_name: str) -> bool:
         """Delete a user skill."""
@@ -72,7 +76,10 @@ class SkillManager:
 
         for key, value in updates.items():
             if value is not None and hasattr(skill, key):
-                setattr(skill, key, value)
+                if key == "references":
+                    skill.references.update(normalize_references(value))
+                else:
+                    setattr(skill, key, value)
         skill.updated_at = datetime.now()
         self.save_user_skill(user_id, skill)
         return skill

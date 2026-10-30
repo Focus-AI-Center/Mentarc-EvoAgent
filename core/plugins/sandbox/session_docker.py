@@ -220,7 +220,7 @@ class DockerSandboxSession:
             return SandboxResult(
                 return_code=124,
                 stdout="",
-                stderr=f"执行超时（>{timeout_s}s）",
+                stderr=f"Execution timed out (>{timeout_s}s)",
                 duration_ms=int((time.time() - t0) * 1000),
                 sandbox_label=self.label,
                 timed_out=True,

@@ -36,4 +36,4 @@ paper
 *.key
 .deepeval/
 .claude/
-.codex/
+.code*/

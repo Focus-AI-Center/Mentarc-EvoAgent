@@ -33,18 +33,21 @@ from core.mcp import MCPToolManager
 from core.plugins import PLUGIN_CLASSES, initialize_plugins
 from core.plugins.ask_user import AskUserQuestionTool
 from core.plugins.internal import (
+    MemoryTool,
     ScheduleManagerTool,
-    SkillManagerTool,
+    SkillTool,
     SubAgentTool,
-    UpdateMemoryTool,
     UpdateUserProfileTool,
 )
 from core.plugins.todo_manager import TodoManagerTool
 from core.skills import Skill
 from core.skills.manager import SkillManager
 from core.skills.matcher import SkillMatcher
+from core.tool_search import configure_agent_tools
+from utils.context_assets import memory_index_context, skill_location_context
 from utils.history_compressor import HistoryCompressor
 from utils.logger import logger
+from utils.tool_names import canonical_tool_name
 from utils.workspace import Workspace
 from utils.ws_call import ws_call
 
@@ -135,9 +138,9 @@ class EvoAgent:
 
         # Internal tools (always loaded)
         self.tools.append(UpdateUserProfileTool(user_id=user_id, workspace=self.workspace))
-        self.tools.append(UpdateMemoryTool(user_id=user_id, workspace=self.workspace))
+        self.tools.append(MemoryTool(user_id=user_id, workspace=self.workspace))
         self.tools.append(
-            SkillManagerTool(
+            SkillTool(
                 user_id=user_id,
                 skill_manager=self.skill_manager,
                 workspace=self.workspace,
@@ -209,36 +212,36 @@ class EvoAgent:
 
         user_body = _prompt_body(user_text)
         if user_body:
-            self.system_prompt = self.base_system_prompt + f"\n\n## 用户信息\n{user_body}"
+            self.system_prompt = self.base_system_prompt + f"\n\n## User information\n{user_body}"
         else:
             self.system_prompt = self.base_system_prompt
 
         memory_body = _prompt_body(memory_text)
         if memory_body:
             self.system_prompt += (
-                "\n\n## 记忆索引\n"
-                f"{memory_body}\n\n"
-                '_要某条记忆的完整正文，调用 `update_memory(action="get", title="...")`；'
-                "详细规则见下方「长期记忆维护」。_"
+                "\n\n## Memory index\n"
+                f"{memory_index_context(memory_body)}\n\n"
+                '_Read a memory body with `memory(action="get", title="...")`. '
+                "See the long-term memory rules below._"
             )
 
         self._preloaded_skills = top_skills
         if self._preloaded_skills:
             catalog = "\n".join(
-                f"- **{s.name}**: {s.description} (触发词: {', '.join(s.triggers)})"
+                f"- **{s.name}**: {s.description} (Triggers: {', '.join(s.triggers)})"
                 for s in self._preloaded_skills.values()
             )
-            self.system_prompt += f"\n\n## 已掌握技能\n{catalog}"
+            self.system_prompt += f"\n\n## Available skills\n{catalog}"
 
         # When core profile fields are empty, append a strong reminder at the very end
         # so LLM doesn't forget to update profile while executing skills
         if self._check_profile_incomplete(user_body):
             self.system_prompt += (
-                "\n\n## ⚠️ 用户画像待完善\n"
-                "检测到用户画像的核心字段（主营产品、公司名称、目标市场等）为空。\n"
-                "当用户**主动介绍自己的业务信息**时，调用 `update_user_profile` 更新对应字段。\n"
-                "注意：单次任务中出现的产品信息不要直接写入画像；"
-                "同一产品出现≥2次时询问确认，≥3次时直接追加到主营产品。"
+                "\n\n## ⚠️ Incomplete user profile\n"
+                "Core profile fields such as products, company and markets are empty.\n"
+                "When the user explicitly describes their business, update the relevant fields with `update_user_profile`.\n"
+                "Do not infer profile facts from incidental task content. "
+                "Confirm repeated product signals with the user before updating their profile."
             )
 
     @staticmethod
@@ -246,9 +249,9 @@ class EvoAgent:
         """Check if core trade profile fields are all empty."""
         if not user_body:
             return True
-        core_fields = ["主营产品", "公司名称", "目标市场"]
+        core_fields = ["Main products", "Company name", "Target markets"]
         for field in core_fields:
-            idx = user_body.find(field + "：")
+            idx = user_body.find(field + ":")
             if idx == -1:
                 continue
             value_start = idx + len(field) + 1
@@ -256,7 +259,7 @@ class EvoAgent:
             value = (
                 user_body[value_start:newline].strip() if newline != -1 else user_body[value_start:].strip()
             )
-            if value and not value.startswith("（"):
+            if value and not value.startswith("("):
                 return False  # At least one core field has a value
         return True
 
@@ -266,8 +269,10 @@ class EvoAgent:
         not requesting execution of an existing skill."""
         import re
 
-        # Match patterns like: 创建/新建/添加/修改/删除/查看 + skill/技能
-        meta_pattern = r"(创建|新建|添加|保存|修改|编辑|更新|删除|移除|查看|列出|管理).{0,6}(skill|技能)"
+        # Match explicit skill-management requests rather than workflow execution.
+        meta_pattern = (
+            r"\b(create|add|save|modify|edit|update|delete|remove|view|list|manage)\b.{0,30}\bskills?\b"
+        )
         return bool(re.search(meta_pattern, user_input, re.IGNORECASE))
 
     async def _match_skill(self, user_input: str) -> Skill | None:
@@ -294,7 +299,7 @@ class EvoAgent:
             self._ensure_tools(result.skill.required_tools)
             if not self._skill_in_history(result.skill.name):
                 # First activation this session: inject into history so instructions
-                # persist across turns (mirroring skill_manager get), with natural
+                # persist across turns (mirroring skill get), with natural
                 # expiry via history compression.
                 self.skill_manager.increment_usage(self.user_id, result.skill.name)
                 self._inject_skill_into_history(result.skill)
@@ -353,38 +358,39 @@ class EvoAgent:
         await self._post_session()
 
     def _skill_in_history(self, skill_name: str) -> bool:
-        """Check if skill instructions already exist in history as a skill_manager tool result.
+        """Check if skill instructions already exist in history as a skill tool result.
 
         Matches the fixed header produced by _format_skill_content() and
-        SkillManagerTool._action_get(), covering both synthetic injections and
-        genuine agent-initiated skill_manager get calls.
+        SkillTool._action_get(), covering both synthetic injections and
+        genuine agent-initiated skill get calls.
         """
-        skill_header = f"技能文档 `{skill_name}/SKILL.md`"
+        skill_header = f"Skill document `{skill_name}/SKILL.md`"
         return any(
             msg.get("role") == "tool"
-            and msg.get("name") == "skill_manager"
+            and msg.get("name") == "skill"
             and skill_header in msg.get("content", "")
             for msg in self.history
         )
 
     def _format_skill_content(self, skill: "Skill") -> str:
-        """Format skill content matching SkillManagerTool._action_get() output."""
-        result = f"技能文档 `{skill.name}/SKILL.md`:\n\n```markdown\n{skill.instructions}\n```"
+        """Format skill content matching SkillTool._action_get() output."""
+        result = f"Skill document `{skill.name}/SKILL.md`:\n\n```markdown\n{skill.instructions}\n```"
+        result += f"\n\n{skill_location_context(skill.name)}"
         if skill.required_tools:
-            result += f"\n\n所需工具 (required_tools): {', '.join(skill.required_tools)}"
+            result += f"\n\nRequired tools (required_tools): {', '.join(skill.required_tools)}"
         if skill.references:
-            result += f"\n\n可用支撑文件 ({len(skill.references)}):"
+            result += f"\n\nAvailable references ({len(skill.references)}):"
             for filename, content in skill.references.items():
-                result += f"\n- `{filename}` ({len(content)}字符) → skill_manager(action='get_ref', name='{skill.name}', ref_filename='{filename}')"
+                result += f"\n- `{filename}` ({len(content)}characters) → skill(action='get_ref', name='{skill.name}', ref_filename='{filename}')"
         return result
 
     def _inject_skill_into_history(self, skill: "Skill") -> None:
-        """Append a synthetic skill_manager get call+result to history.
+        """Append a synthetic skill get call+result to history.
 
         Appended after existing history so it appears between prior conversation
         and the current user message. The agent sees it in pure_history before
         processing user_input, so skill instructions are available this turn.
-        Mirrors skill_manager(get); old entries expire via history compression.
+        Mirrors skill(get); old entries expire via history compression.
         """
         synthetic_id = f"skill_autoload_{skill.name}"
         self.history.extend(
@@ -397,7 +403,7 @@ class EvoAgent:
                             "id": synthetic_id,
                             "type": "function",
                             "function": {
-                                "name": "skill_manager",
+                                "name": "skill",
                                 "arguments": json.dumps({"action": "get", "name": skill.name}),
                             },
                         }
@@ -406,7 +412,7 @@ class EvoAgent:
                 {
                     "role": "tool",
                     "content": self._format_skill_content(skill),
-                    "name": "skill_manager",
+                    "name": "skill",
                     "tool_call_id": synthetic_id,
                 },
             ]
@@ -482,14 +488,13 @@ class EvoAgent:
         _ensure_sdk_client()
 
         sdk_tools = convert_tools(self.tools)
-        mcp_tools = await MCPToolManager(
+        mcp_manager = MCPToolManager(
             user_id=self.user_id,
             session_id=self.session_id,
             workspace=self.workspace,
-        ).create_tools(existing_names={getattr(t, "name", "") for t in sdk_tools})
-        sdk_tools.extend(mcp_tools)
+        )
 
-        return _SDKAgent(
+        agent = _SDKAgent(
             name="EvoAgent",
             instructions=self.system_prompt,
             model=self.model,
@@ -501,6 +506,12 @@ class EvoAgent:
             ),
             tool_use_behavior="run_llm_again",
         )
+        await configure_agent_tools(
+            agent,
+            loader=mcp_manager.create_tools,
+            initially_loaded=self.matched_skill.required_tools if self.matched_skill else (),
+        )
+        return agent
 
     async def _stream_agent_events(self, user_input: str) -> AsyncGenerator[dict, None]:
         """Run the SDK agent with streaming and yield SSE-compatible events."""
@@ -564,7 +575,7 @@ class EvoAgent:
                 "content": json.dumps(
                     {
                         "id": synthetic_id,
-                        "name": "skill_manager",
+                        "name": "skill",
                         "arguments": json.dumps({"action": "get", "name": sk.name}, ensure_ascii=False),
                     },
                     ensure_ascii=False,
@@ -575,8 +586,8 @@ class EvoAgent:
                 "content": json.dumps(
                     {
                         "id": synthetic_id,
-                        "name": "skill_manager",
-                        "result": f"已加载技能 {sk.name}",
+                        "name": "skill",
+                        "result": f"loadedSkill {sk.name}",
                     },
                     ensure_ascii=False,
                 ),
@@ -662,6 +673,7 @@ async def _stream_sdk_events(result, tools: list) -> AsyncGenerator[dict, None]:
       code 8: html_render
       code 9: todo_manager progress
       code 10: ask_user_question
+      code 12: complete sub-agent skill proposals for user confirmation
     """
     from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 
@@ -725,7 +737,7 @@ async def _stream_sdk_events(result, tools: list) -> AsyncGenerator[dict, None]:
                             {
                                 "id": tc_id,
                                 "name": tc_name,
-                                "result": "HTML 页面已生成，正在渲染预览...",
+                                "result": "HTML page generated; rendering preview...",
                             },
                             ensure_ascii=False,
                         ),
@@ -870,6 +882,19 @@ def _sanitize_history(raw: list[dict]) -> list[dict]:
         for k, v in clean.items():
             if v is None:
                 clean[k] = ""
+        if "name" in clean:
+            clean["name"] = canonical_tool_name(clean["name"])
+        if clean.get("tool_calls"):
+            clean["tool_calls"] = [
+                {
+                    **call,
+                    "function": {
+                        **call.get("function", {}),
+                        "name": canonical_tool_name(call.get("function", {}).get("name", "")),
+                    },
+                }
+                for call in clean["tool_calls"]
+            ]
         cleaned.append(clean)
     return cleaned
 
@@ -889,18 +914,18 @@ async def run_session_update_stream(
     ws = workspace or Workspace(user_id)
     history_data = await ws_call(ws, "history_load", session_id)
     if not history_data or not isinstance(history_data, dict):
-        yield {"code": 2, "content": "当前会话为空，无需更新。"}
+        yield {"code": 2, "content": "The current session is empty; no update is needed."}
         return
 
     history = _sanitize_history(history_data.get("conversation", []))
     if not history:
-        yield {"code": 2, "content": "当前会话为空，无需更新。"}
+        yield {"code": 2, "content": "The current session is empty; no update is needed."}
         return
 
     # 2. Load prompt (SESSION_UPDATE + SKILL_EXTRACT appended)
     update_prompt = prompts.get_body("SESSION_UPDATE")
     if not update_prompt:
-        yield {"code": 2, "content": "SESSION_UPDATE prompt 未找到。"}
+        yield {"code": 2, "content": "SESSION_UPDATE prompt not found."}
         return
     skill_extract_prompt = prompts.get_body("SKILL_EXTRACT")
     if skill_extract_prompt:
@@ -909,20 +934,22 @@ async def run_session_update_stream(
     # 2b. Inject current user profile for comparison
     user_body = _prompt_body(await ws_call(ws, "read_prompt", "USER"))
     if user_body:
-        update_prompt += f"\n\n## 当前用户画像\n{user_body}"
+        update_prompt += f"\n\n## Current user profile\n{user_body}"
 
     # 2c. Inject recent session summaries for behavior analysis
     sessions = await ws_call(ws, "list_sessions")
     if sessions:
         recent = sessions[:10]
-        summaries = "\n".join(f"- [{s.get('timestamp', '')}] {s.get('preview', '(无摘要)')}" for s in recent)
-        update_prompt += f"\n\n## 近期会话记录\n{summaries}"
+        summaries = "\n".join(
+            f"- [{s.get('timestamp', '')}] {s.get('preview', '(No summary)')}" for s in recent
+        )
+        update_prompt += f"\n\n## Recent conversations\n{summaries}"
 
     # 3. Tools: profile + memory + full skill manager
     tools = [
         UpdateUserProfileTool(user_id=user_id, workspace=ws),
-        UpdateMemoryTool(user_id=user_id, workspace=ws),
-        SkillManagerTool(
+        MemoryTool(user_id=user_id, workspace=ws),
+        SkillTool(
             user_id=user_id,
             skill_manager=SkillManager(workspace=ws),
             workspace=ws,
@@ -939,12 +966,17 @@ async def run_session_update_stream(
         instructions=update_prompt,
         model=MODEL,
         tools=sdk_tools,
-        model_settings=ModelSettings(temperature=0.4, max_tokens=6000),
+        model_settings=ModelSettings(temperature=0.4, max_tokens=16000),
         tool_use_behavior="run_llm_again",
     )
 
     input_messages = _history_to_sdk_input(history)
-    input_messages.append({"role": "user", "content": "请回顾以上对话，按需更新用户画像和记忆。"})
+    input_messages.append(
+        {
+            "role": "user",
+            "content": "Review the conversation above and update the user profile and memory as warranted.",
+        }
+    )
 
     # 5. Stream events
     yield {"code": 3, "content": "stream_start"}
@@ -954,7 +986,7 @@ async def run_session_update_stream(
             yield event
     except Exception as e:
         logger.error(f"Update agent failed: {e}")
-        yield {"code": 2, "content": f"更新失败: {str(e)}"}
+        yield {"code": 2, "content": f"Update failed: {str(e)}"}
 
     # Save updated history
     try:

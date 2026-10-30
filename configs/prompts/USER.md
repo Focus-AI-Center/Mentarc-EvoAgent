@@ -1,34 +1,32 @@
 ---
 name: USER
-description: 关于用户的信息（由 Agent 在对话中自动维护）
+description: User profile maintained from information the user explicitly provides
 variables: []
 ---
 
-## 基本信息
-姓名：
-称呼：
-时区：
-工作区：
+## Basic information
 
-社交账号：
+Name:
+Nickname:
+Timezone:
+Workspace:
+Social accounts:
 
+## Business information
 
-## 业务信息
-主营产品：
-公司名称：
-公司网址：
-公司规模：
-当前主要阶段/目标：
-主要行业：
-目标市场：
-平台偏好：
-风格偏好：
-商务策略偏好：
+Main products:
+Company name:
+Company website:
+Company scale:
+Current stage/goals:
+Main industry:
+Target markets:
+Platform preferences:
+Style preferences:
+Business strategy:
 
+## General information
 
-## 通用信息
-背景：
+Background:
 
-
-偏好：
-
+Preferences:

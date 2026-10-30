@@ -5,8 +5,8 @@ and markdown body (instructions), consistent with how prompts work:
 
     ---
     name: write-report
-    description: 根据关键词生成SEO报告
-    triggers: [写报告, generate report]
+    description: Generate an SEO report from keywords
+    triggers: [write report, generate report]
     required_tools: [websearch, fetchurl]
     tags: [writing, seo]
     source: extracted
@@ -14,8 +14,8 @@ and markdown body (instructions), consistent with how prompts work:
     usage_count: 5
     ---
 
-    1. 使用 websearch 搜索关键词相关资料
-    2. 整理并生成报告
+    1. Search keyword-related sources with websearch
+    2. Organize findings and write the report
     ...
 """
 
@@ -24,7 +24,10 @@ from datetime import datetime
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from utils.skill_references import normalize_references
+from utils.tool_names import canonical_tool_name, normalize_tool_references
 
 
 class SkillParam(BaseModel):
@@ -69,7 +72,12 @@ class Skill(BaseModel):
     update_target: str | None = None  # name of the existing skill to update
 
     # References (lazy-loaded content like templates)
-    references: dict[str, str] = {}
+    references: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("references")
+    @classmethod
+    def validate_references(cls, value):
+        return normalize_references(value)
 
     # Trigger-based sub-agent handoff (paper Appendix A, Phase 2.5).
     # When set, matching this skill bypasses the main agent: a dedicated
@@ -127,7 +135,9 @@ def skill_from_md(content: str, fallback_name: str = "") -> Skill:
         meta = {}
         body = content
 
-    meta["instructions"] = body.strip()
+    meta["instructions"] = normalize_tool_references(body.strip())
+    if isinstance(meta.get("required_tools"), list):
+        meta["required_tools"] = [canonical_tool_name(name) for name in meta["required_tools"]]
     if fallback_name and "name" not in meta:
         meta["name"] = fallback_name
 

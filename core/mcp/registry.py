@@ -218,7 +218,7 @@ async def load_mcp_registry(workspace) -> MCPRegistry:
         raw = await ws_call(workspace, "mcp_config_load")
     except Exception as exc:
         logger.warning(f"[mcp-registry] failed to load mcp config: {exc}")
-        return MCPRegistry()
+        raise
     if not raw:
         return MCPRegistry()
     if isinstance(raw, str):

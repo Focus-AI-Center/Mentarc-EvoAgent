@@ -17,92 +17,51 @@ based on whether `MINIO_ENDPOINT` is set. The dispatcher itself enforces
 language whitelist (bash / python only), a regex blacklist for destructive
 patterns (`rm -rf /`, `mkfs`, `dd if=`, `shutdown`, fork bombs, raw-device
 overwrite), CWD path validation (no traversal), 30 s default timeout, and
-10 KB output truncation. Everything else depends on the backend.
+10,000-character output truncation per stream. Everything else depends on the backend.
 
-#### MINIO mode → `RemoteDockerBackend` (validated, recommended)
+#### MINIO mode -> `SessionDockerBackend`
 
-Each invocation creates a one-shot Docker container on a separate sandbox
-host:
+The current factory reuses one Docker container per `(user_id, session_id)`.
+`execute_code` calls and configured stdio MCP processes share that container.
+The Docker daemon can run on a separate host through `DOCKER_HOST`; a separate
+host is a deployment choice, not an automatic guarantee. The legacy one-shot
+`RemoteDockerBackend` remains available in the source but is not selected by
+this factory.
 
-- **Container**: `evoagent-sandbox:python3.11` (built from
-  [`deploy/sandbox-image/`](deploy/sandbox-image)). Started with
-  `--cap-add SYS_ADMIN --device /dev/fuse --security-opt apparmor=unconfined`
-  (FUSE prerequisites for s3fs).
-- **Workspace**: only the user's bucket prefix is mounted —
-  `s3fs {bucket}:/{user_id} /workspace` — so the container's FUSE view
-  starts at the user's root. `cd /workspace/../other_user` resolves above
-  the FUSE mount (it lands on the container's own rootfs, not on s3fs),
-  so cross-user paths are simply not reachable through the filesystem.
-  Server-side writes via `MinIOSDKBackend` and sandbox-side writes through
-  s3fs share the same object key space — strong consistency, no caches.
-- **Lifecycle**: server runs `containers.run(detach=True, auto_remove=False)`,
-  reads stdout/stderr after the container exits, then `force=True` removes
-  it in `finally`. `--rm` is intentionally not used because we read logs
-  after exit. Container leaks are possible if the server is `kill -9`'d
-  mid-run; handle with a periodic `docker container prune -f --filter "until=1h"`
-  on the sandbox host.
-- **Credentials passed in (env)**: `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` /
-  `MINIO_BUCKET` / `USER_ID`. M2 ships with the **server's root credentials**;
-  this is the most permissive option and should be replaced before production
-  exposure (see roadmap below).
-- **Privilege drop before user code runs**. The entrypoint runs as root only
-  long enough to write `/etc/passwd-s3fs` (mode 600 root) and start the s3fs
-  mount; it then `unset`s `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` and
-  `exec runuser -u sandbox --` into the user's command. The `sandbox` UID
-  (2000, no home, no sudo) cannot read the cred file (mode 600) nor s3fs's
-  `/proc/<pid>/environ` (root-owned), and `runuser ... -- env ...` resets the
-  inherited env to a minimal allowlist (`HOME`, `LANG`, `LC_ALL`, plus
-  Python-only flags). The s3fs mount is configured with
-  `allow_other -o uid=2000 -o gid=2000` so reads / writes through `/workspace`
-  still work for the unprivileged UID.
+- **Container privileges.** The image uses `SYS_ADMIN`, `/dev/fuse` and
+  `apparmor=unconfined` for s3fs. Commands run through Docker exec as the
+  unprivileged `sandbox` user, but these settings are not VM-grade isolation.
+- **Workspace view.** s3fs mounts `{bucket}:/{user_id}` at `/workspace`.
+  Server-side MinIO SDK operations and mounted-file operations address the same
+  object namespace. Prefix mounting limits the filesystem view; it does not
+  establish object-store authorization. Filesystem metadata may be cached and
+  arbitrary cross-file operations are not transactional.
+- **Credentials.** The container receives the configured server MinIO keys.
+  The entrypoint writes a root-owned credential file and clears key variables
+  from its own environment before entering session mode. This does not create
+  per-user STS credentials or establish a complete credential-isolation boundary;
+  the Docker container configuration still contains the supplied environment.
+- **Lifetime.** Containers are reused, not removed after every command. Idle
+  cleanup runs every 60 seconds with a default 900-second TTL. Shutdown removes
+  owned containers; startup orphan cleanup removes all session-labelled
+  containers on the daemon. The registry is process-local, so uncoordinated API
+  workers can interfere with each other's active sessions.
+- **Resource limits.** A session memory limit is configured at container creation.
+  Command timeouts and output caps apply to `execute_code`; they are not a hard
+  lifetime cap for the entire session or its MCP processes. Commands may execute
+  concurrently in the same container.
+- **Network.** `SANDBOX_NETWORK` defaults to `host`. The current session backend
+  does not enforce per-call network isolation from `EXECUTE_CODE_NETWORK=deny`.
+  Actual egress control must be configured on the host/container network.
 
-**What this protects against**
+Before accepting untrusted workloads, use scoped storage credentials, enforce
+network access, apply stronger runtime isolation and resource controls, and
+coordinate session ownership. A separate sandbox host can separate compute from
+the API host, but its reachability and credential scope still determine the
+impact of a compromise. LOCAL mode offers less isolation, as described below.
 
-- Process / mount / network namespace separation between sandbox runs and the
-  server (kernel-mediated, not VM-grade).
-- Kernel escape from sandbox cannot reach the *server* host; it lands on
-  the *sandbox* host, whose blast radius is whatever you've allowed it on
-  the network and in your MinIO ACL.
-- A misbehaving sandbox cannot eat the server's RAM / CPU / disk.
-
-**What this does NOT protect against (yet)**
-
-- **Cross-user MinIO access if a privileged process is compromised.** The
-  s3fs mount is scoped to `{bucket}:/{user_id}` (FUSE view cannot reach
-  other users' prefixes) and the cred env vars are scrubbed before user
-  code runs as `sandbox` UID 2000 (so a Python `boto3` client inside the
-  sandbox cannot read the keys from `os.environ`, `/etc/passwd-s3fs`, or
-  `/proc/<pid>/environ`). What this does **not** stop: a kernel exploit
-  that escalates back to root in the namespace can still read the cred
-  file and the s3fs daemon's environ, which would re-expose the server's
-  root credentials and grant access to any user prefix in the bucket. M3
-  in the roadmap closes this last gap by replacing the env creds with
-  STS tokens scoped to `{user_id}/*` with a 5-minute TTL — even a full
-  privilege escalation then only buys 5 minutes of single-user blast
-  radius.
-- **Network egress.** `--network host` (the validated default) gives the
-  container the same network reachability as the sandbox host. Tighten
-  with a custom bridge + iptables/NetworkPolicy, or an egress proxy.
-- **Kernel escape.** Containers are not VMs. For adversarial multi-tenant
-  use, run the sandbox host on gVisor / Kata / Firecracker, or replace
-  this backend with a managed runtime (E2B, Modal, Daytona).
-- **Container leaks on server crash.** `auto_remove=False` + finally-remove
-  works for clean exits and timeouts; `kill -9` on the server leaves an
-  Exited container until pruned.
-
-**Before exposing MINIO mode to untrusted users**
-
-1. Implement STS scoping so the sandbox sees credentials scoped to
-   `arn:aws:s3:::{bucket}/{user_id}/*` with a 5-minute TTL, instead of
-   the server's root creds. MinIO requires the Allow + Deny-NotResource
-   pattern (the AWS-standard single Allow does not work on MinIO 2024+).
-2. Replace `--network host` with a bridge that only routes to the MinIO
-   endpoint + DNS; default-deny everything else.
-3. Add per-user concurrency + QPS caps in `execute_code.py` (see § 3).
-4. Move the docker daemon onto a hardened runtime (gVisor preferred for
-   density, Firecracker for adversarial isolation).
-5. Persist an audit log of every `(user_id, code_hash, sandbox_label,
-   return_code, stderr_tail)` tuple.
+See [Cloud Agent architecture and sandbox runtime](docs/cloud-agent.md) for
+current paths, lifecycle, configuration and ownership details.
 
 #### LOCAL mode → `LocalSubprocessBackend` (single-tenant only)
 

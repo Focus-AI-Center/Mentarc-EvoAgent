@@ -36,7 +36,7 @@ async def chat(request: AgentRequest, req: Request):
     request_id = request.requestId or str(uuid.uuid4())[:8]
     user_input = request.data.input
     if request.data.images:
-        user_input += "\n\n[用户上传的图片]\n" + "\n".join(request.data.images)
+        user_input += "\n\n[User-uploaded images]\n" + "\n".join(request.data.images)
 
     logger.info(
         f"Chat request: user={user_id} session={session_id} "
@@ -86,7 +86,7 @@ async def chat(request: AgentRequest, req: Request):
 
                 # Before stream_end, emit output-side extraction (code 11)
                 # Try all output extractors (not just matched_skill) because the
-                # agent may load additional skills mid-session via skill_manager.
+                # agent may load additional skills mid-session via skill.
                 if event.get("code") == 3 and event.get("content") == "stream_end":
                     if full_response:
                         for _ext_fn in OUTPUT_EXTRACTORS.values():

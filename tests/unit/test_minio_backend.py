@@ -105,7 +105,7 @@ async def test_read_missing_raises(backend, run_prefix):
 
 
 async def test_unicode_text_roundtrip(backend, run_prefix):
-    text = "测试 — émoji 🚀\n你好"
+    text = "Unicode test — émoji 🚀\nHello"
     key = f"{run_prefix}/zh.md"
     await backend.write_text(key, text)
     assert await backend.read_text(key) == text
