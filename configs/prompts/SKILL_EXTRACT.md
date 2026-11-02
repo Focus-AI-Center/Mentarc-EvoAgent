@@ -20,7 +20,7 @@ Skip simple questions, casual conversation and isolated tool calls. Do not inven
 1. Call `skill(action="list")` to avoid duplicates.
 2. Identify a new workflow or a meaningful improvement.
 3. Output a valid JSON proposal between `[SKILL_PROPOSAL]` and `[/SKILL_PROPOSAL]`.
-4. Do not call `save` or `ref_set` during extraction. The system saves the bundle after user confirmation.
+4. Do not mutate skills during extraction (`save`, `patch`, `delete`, `ref_set` or `ref_del`). The system saves the bundle after user confirmation.
 
 ## Proposal fields
 

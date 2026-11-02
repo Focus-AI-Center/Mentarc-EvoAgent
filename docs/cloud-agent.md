@@ -21,7 +21,7 @@ flowchart LR
 | Task | Preferred path | Reason |
 |---|---|---|
 | Load a skill or read a reference | `skill(get)` / `skill(get_ref)` -> Workspace -> MinIO SDK | Read stored text without a sandbox invocation |
-| Save a skill and text references | `skill(save)` / `skill(ref_set)` -> Workspace -> MinIO SDK | Validate paths and update objects directly |
+| Save or patch a skill and text references | `skill(save)` / `skill(patch)` / `skill(ref_set)` -> Workspace -> MinIO SDK | Validate paths and update objects directly; patches use conditional writes |
 | Read or update durable memory | `memory` -> Workspace -> MinIO SDK | Resolve titles, preserve index conventions and handle competing writes |
 | Run a helper or transform a dataset | `execute_code` -> session Docker exec -> mounted workspace | A process, dependencies and computation are required |
 | Run a configured stdio MCP server | MCP consumer -> Docker exec in the same session sandbox | Keep its process and JSON-RPC stream alive |
@@ -39,8 +39,10 @@ skill(action="get_ref", name="buyer-lead-screening", ref_filename="rules.md")
 ```
 
 The API process resolves the workspace path and reads MinIO through its SDK.
-It does not call Docker or require an execution container. Likewise, `save` and
-`ref_set` write text through the storage backend without starting a shell.
+It does not call Docker or require an execution container. Likewise, `save`,
+`patch` and `ref_set` write text through the storage backend without starting a
+shell. `patch` reads and conditionally updates one existing document, preserving
+unrelated text. See the [exact patch contract](skill-extraction.md#exact-patches).
 
 A bash read of the same content would use an additional sandbox execution path:
 obtain or start the session container, connect through Docker exec, start the

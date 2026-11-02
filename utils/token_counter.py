@@ -5,7 +5,7 @@ _encoding = tiktoken.get_encoding("cl100k_base")
 
 def count_tokens(text: str) -> int:
     """Count tokens in a text string."""
-    return len(_encoding.encode(text))
+    return len(_encoding.encode(text, disallowed_special=()))
 
 
 def count_messages_tokens(messages: list[dict]) -> int:

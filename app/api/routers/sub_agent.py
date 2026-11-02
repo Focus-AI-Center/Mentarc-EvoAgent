@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from contextlib import aclosing
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -57,9 +58,10 @@ async def sub_agent_chat(agent_type: str, request: AgentRequest):
 
     async def generate():
         try:
-            async for event in runner.run_stream(user_input):
-                event["requestId"] = request_id
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            async with aclosing(runner.run_stream(user_input)) as source:
+                async for event in source:
+                    event["requestId"] = request_id
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.error(f"Sub-agent stream error: {e}", exc_info=True)
             yield f"data: {json.dumps({'code': 3, 'content': f'error: {str(e)}', 'requestId': request_id})}\n\n"

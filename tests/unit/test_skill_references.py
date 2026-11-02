@@ -245,7 +245,11 @@ async def test_sub_agent_proposal_bypasses_summary_truncation(workspace, monkeyp
 
     class Reviewer:
         def __init__(self, **kwargs):
-            pass
+            from types import SimpleNamespace
+
+            self.user_id = kwargs["user_id"]
+            self.session_id = kwargs["session_id"]
+            self.config = SimpleNamespace(name="session-reviewer")
 
         async def run_stream(self, *args):
             yield {"code": 2, "content": body[:4000]}
@@ -253,11 +257,21 @@ async def test_sub_agent_proposal_bypasses_summary_truncation(workspace, monkeyp
 
     monkeypatch.setattr(sub_module, "SubAgentRunner", Reviewer)
     tool = SubAgentTool(user_id="alice", workspace=workspace)
+    events = []
+
+    async def emit(event):
+        events.append(event)
+
+    tool.event_sink = emit
     summary = await tool(SubAgentParams(agent_type="session-reviewer", task="Extract skill"))
-    assert tool._sub_events == [{"code": 12, "content": body}]
+    assert [event["code"] for event in events] == [12]
+    assert events[0]["content"] == body
+    assert events[0]["source_agent"] == "session-reviewer"
     assert len(summary) < 4000
     assert "Complete body" not in summary
-    assert ("confirmation card" if complete else "output is incomplete") in summary
+    receipt = json.loads(summary)
+    assert receipt["status"] == ("delivered" if complete else "failed")
+    assert receipt["task_id"] == events[0]["task_id"]
 
 
 @pytest.mark.asyncio
@@ -271,7 +285,6 @@ async def test_stream_forwards_full_proposal_event_before_tool_summary(workspace
 
     proposal = "[SKILL_PROPOSAL]" + "Complete reference body" * 3000 + "[/SKILL_PROPOSAL]"
     tool = SubAgentTool(user_id="alice", workspace=workspace)
-    tool._sub_events.append({"code": 12, "content": proposal})
     agent = Agent(name="offline")
 
     class Result:
@@ -288,6 +301,7 @@ async def test_stream_forwards_full_proposal_event_before_tool_summary(workspace
                     ),
                 ),
             )
+            await tool.event_sink({"code": 12, "content": proposal, "task_id": "review"})
             yield RunItemStreamEvent(
                 name="tool_output",
                 item=ToolCallOutputItem(

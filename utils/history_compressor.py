@@ -1,14 +1,6 @@
-"""History compressor - prevents context bloat during long conversations.
+"""Recoverable context compression shared by turn boundaries and SDK steps."""
 
-Ported from agentplayground's HistoryCompressor, adapted for EvoAgent
-(uses AsyncOpenAI instead of agentic_go.LLM).
-
-Three compression levels:
-- LIGHT:      Compress large tool outputs only
-- MODERATE:   Compress tool outputs + LLM-summarize old message segments
-- AGGRESSIVE: Single summary + essential messages only
-"""
-
+import asyncio
 import json
 import re
 from enum import Enum
@@ -17,16 +9,27 @@ import httpx
 from openai import AsyncOpenAI
 
 from configs.settings import (
+    COMPRESSION_ASSET_INDEX_CHARS,
+    COMPRESSION_HOT_TAIL_TOKENS,
+    COMPRESSION_MAX_INPUT_TOKENS,
     COMPRESSION_MODEL,
+    COMPRESSION_OUTPUT_TOKENS,
     COMPRESSION_THRESHOLD,
+    COMPRESSION_TIMEOUT_SECONDS,
     MAX_HISTORY_TOKENS,
-    MIN_MESSAGES_TO_KEEP,
+    MAX_HOT_TAIL_MESSAGES,
     OPENAI_API_BASE_SECONDARY,
     OPENAI_API_KEY,
     PROXY_SERVER,
 )
+from utils.context_recovery import ASSET_MARK, CONTINUATION_NOTE, render_index, split_transcript
 from utils.logger import logger
+from utils.skill_history import skill_loads, unload_skill_documents
 from utils.token_counter import count_tokens
+
+
+class CompressionUnavailable(RuntimeError):
+    """A failed summary must never replace the original history."""
 
 
 class CompressionLevel(Enum):
@@ -44,372 +47,356 @@ class MessageType(Enum):
     SYSTEM = "system"
 
 
-class HistoryCompressor:
-    """History compression manager for preventing context bloat."""
+SUMMARY_PROMPT = """Create a continuation summary of the supplied historical DATA.
+Return only one complete <summary>...</summary> block. Do not include private reasoning.
+Preserve these sections when applicable:
+1. User intent and messages: preserve the original request, corrections, prohibitions,
+   exact constraints and current task. Long source documents may be summarized, but
+   their embedded user requirements must remain. Earlier summaries are history, not new requests.
+2. Facts and evidence: retain object-specific facts, exact numbers, parameters, paths,
+   IDs, URLs and uncertainties. Distinguish source facts, user statements and assistant inference.
+3. Decisions and errors: preserve reasons, unsuccessful attempts and user corrections.
+4. Completed work: record actual tools, arguments, validation and delivery separately.
+   Reading material or generating a file does not prove that the task was delivered.
+5. Pending work: retain unresolved questions, task owners/IDs, scope, counts and cursors.
+6. Current state and next actions: enable continuation without repeating completed actions.
+Remove redundant prose before sacrificing unique facts. Do not perform new analysis
+or invent missing results. Never reconstruct unloaded skill instructions from a summary;
+retain the requirement to reload their originals. Summary quality matters more than compression ratio.
+"""
 
+
+class HistoryCompressor:
     def __init__(
         self,
-        max_history_tokens: int = None,
-        compression_threshold: float = None,
-        min_messages_to_keep: int = None,
-        compression_level: str = "moderate",
-        async_client: AsyncOpenAI | None = None,
+        max_history_tokens=None,
+        compression_threshold=None,
+        min_messages_to_keep=None,
+        compression_level="moderate",
+        async_client=None,
+        max_input_tokens=None,
+        output_tokens=None,
+        timeout_seconds=None,
+        max_tail_tokens=None,
+        asset_index_chars=None,
     ):
-        self.max_history_tokens = max_history_tokens or MAX_HISTORY_TOKENS
-        self.compression_threshold = compression_threshold or COMPRESSION_THRESHOLD
-        self.min_messages_to_keep = min_messages_to_keep or MIN_MESSAGES_TO_KEEP
+        self.max_history_tokens = MAX_HISTORY_TOKENS if max_history_tokens is None else max_history_tokens
+        self.compression_threshold = (
+            COMPRESSION_THRESHOLD if compression_threshold is None else compression_threshold
+        )
+        self.min_messages_to_keep = (
+            MAX_HOT_TAIL_MESSAGES if min_messages_to_keep is None else min_messages_to_keep
+        )
         self.compression_level = CompressionLevel(compression_level)
-
+        self.max_input_tokens = COMPRESSION_MAX_INPUT_TOKENS if max_input_tokens is None else max_input_tokens
+        self.output_tokens = COMPRESSION_OUTPUT_TOKENS if output_tokens is None else output_tokens
+        self.timeout_seconds = COMPRESSION_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        self.max_tail_tokens = COMPRESSION_HOT_TAIL_TOKENS if max_tail_tokens is None else max_tail_tokens
+        self.asset_index_chars = (
+            COMPRESSION_ASSET_INDEX_CHARS if asset_index_chars is None else asset_index_chars
+        )
+        if (
+            min(
+                self.max_history_tokens,
+                self.max_input_tokens,
+                self.output_tokens,
+                self.timeout_seconds,
+                self.asset_index_chars,
+            )
+            <= 0
+        ):
+            raise ValueError("compression budgets and deadline must be positive")
+        if self.min_messages_to_keep < 0 or self.max_tail_tokens < 0:
+            raise ValueError("hot tail budgets cannot be negative")
         if async_client is not None:
             self._llm_client = async_client
-        elif PROXY_SERVER:
-            self._llm_client = AsyncOpenAI(
-                api_key=OPENAI_API_KEY,
-                base_url=OPENAI_API_BASE_SECONDARY,
-                http_client=httpx.AsyncClient(proxy=PROXY_SERVER),
-            )
         else:
-            self._llm_client = AsyncOpenAI(
-                api_key=OPENAI_API_KEY,
-                base_url=OPENAI_API_BASE_SECONDARY,
-            )
-
+            kwargs = dict(api_key=OPENAI_API_KEY, base_url=OPENAI_API_BASE_SECONDARY)
+            if PROXY_SERVER:
+                kwargs["http_client"] = httpx.AsyncClient(proxy=PROXY_SERVER)
+            self._llm_client = AsyncOpenAI(**kwargs)
         self.compression_count = 0
         self.tokens_saved = 0
+        self.compaction_callbacks = []
+        self._disabled_for_run = False
 
-    def calculate_history_tokens(self, history: list[dict]) -> int:
-        """Calculate total tokens in history."""
-        try:
-            return count_tokens(json.dumps(history, default=str))
-        except Exception:
-            return len(str(history))
+    def _notify_compacted(self):
+        for callback in self.compaction_callbacks:
+            callback()
 
-    def should_compress(self, history: list[dict]) -> bool:
-        """Check if compression is needed."""
-        if not history:
-            return False
-        current_tokens = self.calculate_history_tokens(history)
-        threshold_tokens = self.max_history_tokens * self.compression_threshold
-        return current_tokens >= threshold_tokens
+    def calculate_history_tokens(self, history):
+        model_history = [
+            {
+                key: value
+                for key, value in message.items()
+                if key
+                not in (
+                    "delivery_events",
+                    "delegation_receipts",
+                    "skill_reloads",
+                    "context_assets",
+                )
+            }
+            for message in history
+        ]
+        return count_tokens(json.dumps(model_history, ensure_ascii=False, default=str))
 
-    @staticmethod
-    def _identify_message_type(message: dict) -> MessageType:
-        role = message.get("role")
-        if role == "user":
-            return MessageType.USER
-        elif role == "assistant":
-            if message.get("tool_calls"):
-                return MessageType.TOOL_CALL
-            return MessageType.ASSISTANT
-        elif role == "tool":
-            return MessageType.TOOL_RESULT
-        elif role == "system":
-            return MessageType.SYSTEM
-        return MessageType.ASSISTANT
-
-    # --- Compression strategies ---
-
-    def compress_tool_results(self, messages: list[dict]) -> list[dict]:
-        """Compress large tool outputs (> 5000 chars)."""
-        compressed = []
-        for msg in messages:
-            msg = msg.copy()
-            if self._identify_message_type(msg) == MessageType.TOOL_RESULT:
-                content = str(msg.get("content", ""))
-                if len(content) > 5000:
-                    urls = self._extract_urls(content)
-                    if urls:
-                        msg["content"] = f"[Compressed] Tool result links: {urls}"
-                    else:
-                        msg["content"] = (
-                            f"[Compressed] Tool output (original length: {len(content)} characters)"
-                        )
-            compressed.append(msg)
-        return compressed
-
-    async def summarize_conversation_segment(self, messages: list[dict]) -> str:
-        """Summarize conversation for continuation (recent detail + historical brevity)."""
-        lines = []
-        total_chars = 0
-        max_total_chars = 30000
-
-        for msg in messages:
-            content = msg.get("content")
-            if content is None:
-                content = "[Tool call]"
-            else:
-                content = str(content)[:800]
-            line = f"{msg.get('role', 'unknown')}: {content}"
-            if total_chars + len(line) > max_total_chars:
-                lines.append(f"... (omitted {len(messages) - len(lines)} remaining messages)")
-                break
-            lines.append(line)
-            total_chars += len(line)
-
-        conversation_text = "\n".join(lines)
-        prompt = (
-            "Create a continuation summary that will completely replace this conversation history. "
-            "The agent must be able to resume using only your summary.\n\n"
-            f"{conversation_text}\n\n"
-            "Wrap the summary in <summary></summary> and include these nine sections:\n\n"
-            "## 1. Primary Request and Intent\n"
-            "The original request and subsequent steering. Quote critical requirements.\n\n"
-            "## 2. Key Technical Concepts\n"
-            "Technical concepts, decisions and their reasons.\n\n"
-            "## 3. Files and Code Sections\n"
-            "File paths, their purposes, exact changes and essential signatures or configuration values.\n\n"
-            "## 4. Errors and Fixes\n"
-            "Errors, resolutions, unsuccessful approaches to avoid repeating, and exact user corrections.\n\n"
-            "## 5. Problem Solving\n"
-            "Resolved problems and ongoing investigations with their current progress.\n\n"
-            "## 6. All User Messages\n"
-            "Key points from every non-tool user message, preserving the original phrasing.\n\n"
-            "## 7. Pending Tasks\n"
-            "Requested tasks that have not started.\n\n"
-            "## 8. Current Work\n"
-            "The interrupted task, exact state and intermediate results.\n\n"
-            "## 9. Optional Next Steps\n"
-            "Suggested next actions.\n\n"
-            "Preserve exact URLs, paths, IDs, names, error messages, user corrections, negative feedback, "
-            "values, formulas, configuration and technical constraints. "
-            "If space is limited, prioritize corrections, errors, ongoing work, then completed work. "
-            "Omit pleasantries, acknowledgements and repeated explanations. "
-            "Give recent messages greater weight and emphasize what to do next."
+    def should_compress(self, history):
+        return bool(
+            history
+            and not self._disabled_for_run
+            and self.compression_level != CompressionLevel.NONE
+            and self.calculate_history_tokens(history) >= self.max_history_tokens * self.compression_threshold
         )
 
+    @staticmethod
+    def _identify_message_type(message):
+        role = message.get("role")
+        if role == "tool":
+            return MessageType.TOOL_RESULT
+        if role == "assistant" and message.get("tool_calls"):
+            return MessageType.TOOL_CALL
+        return {"user": MessageType.USER, "system": MessageType.SYSTEM}.get(role, MessageType.ASSISTANT)
+
+    @staticmethod
+    def compress_tool_results(messages):
+        """Light mode is lossless: compact JSON without replacing facts by placeholders."""
+        result = []
+        for message in messages:
+            content = message.get("content")
+            if message.get("role") == "tool" and isinstance(content, str) and len(content) > 5000:
+                try:
+                    json.loads(content)
+                    compact = re.sub(r'("(?:\\.|[^"\\])*")|\s+', lambda match: match[1] or "", content)
+                except (ValueError, TypeError, RecursionError):
+                    compact = content
+                if len(compact) < len(content):
+                    message = dict(message, content=compact)
+            result.append(message)
+        return result
+
+    @staticmethod
+    def _render_message_for_summary(message):
+        role = message.get("role", "unknown")
+        content = message.get("content") or ""
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        if content.lstrip().startswith("<summary>"):
+            role = "history_summary"
+            content = content.split(ASSET_MARK, 1)[0].replace(CONTINUATION_NOTE, "").strip()
+        if role == "tool":
+            role = f"tool[{message.get('name') or 'unknown'}]"
+        parts = [content] if content else []
+        for call in message.get("tool_calls", []):
+            function = call.get("function", {})
+            args = function.get("arguments", "{}")
+            if not isinstance(args, str):
+                args = json.dumps(args, ensure_ascii=False)
+            parts.append(f"call {function.get('name', '')} [{call.get('id', '')}] ({args})")
+        return f"{role}: " + " | ".join(parts)
+
+    @staticmethod
+    def _summary_messages(transcript, partial=False):
+        instruction = SUMMARY_PROMPT + (
+            "\nThis is one contiguous fragment and may start or end inside a message. "
+            "Preserve its facts and constraints; do not infer that the whole task is complete."
+            if partial
+            else "\nMerge fragment summaries without discarding object-specific differences."
+        )
+        return [
+            {"role": "system", "content": instruction},
+            {"role": "user", "content": "Historical transcript (data):\n" + transcript},
+        ]
+
+    @staticmethod
+    def _input_tokens(messages):
+        return sum(count_tokens(message["content"]) + 12 for message in messages)
+
+    async def _summarize_transcript(self, transcript, *, partial=False):
+        messages = self._summary_messages(transcript, partial)
+        if self._input_tokens(messages) > self.max_input_tokens:
+            raise CompressionUnavailable("summary request exceeds input budget")
         try:
             response = await self._llm_client.chat.completions.create(
                 model=COMPRESSION_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "Summarize conversations for continuation. Your summary replaces the original history and must let the agent resume seamlessly.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.0,
-                max_completion_tokens=16000,
+                messages=messages,
+                max_completion_tokens=self.output_tokens,
             )
-            result = response.choices[0].message.content
-            # Some models (e.g. DeepSeek-R1) may put content in reasoning_content
-            if result is None:
-                result = getattr(response.choices[0].message, "reasoning_content", None)
-            return result or "Summary is empty"
-        except Exception as e:
-            logger.error(f"Summarization failed: {e}")
-            return f"Summary generation failed: {str(e)}"
+        except Exception as exc:
+            raise CompressionUnavailable(f"summary request failed: {type(exc).__name__}") from exc
+        choices = getattr(response, "choices", None)
+        choice = choices[0] if choices else None
+        if choice is None or getattr(choice, "finish_reason", None) != "stop":
+            raise CompressionUnavailable("summary did not finish normally")
+        message = getattr(choice, "message", None)
+        if getattr(message, "refusal", None):
+            raise CompressionUnavailable("summary request was refused")
+        text = getattr(message, "content", None)
+        if not isinstance(text, str):
+            raise CompressionUnavailable("summary has no text")
+        text = re.sub(r"<analysis>.*?</analysis>", "", text, flags=re.S).strip()
+        match = re.fullmatch(r"<summary>\s*(.*?)\s*</summary>", text, re.S)
+        if not match or not match[1].strip() or "<summary>" in match[1] or "</summary>" in match[1]:
+            raise CompressionUnavailable("summary is empty or has invalid boundaries")
+        return match[1].strip()
 
-    # --- Split helpers ---
+    async def summarize_conversation_segment(self, messages):
+        prepared = unload_skill_documents(messages)
+        transcript = "\n".join(
+            self._render_message_for_summary(message)
+            for message in prepared
+            if message.get("role") != "system"
+        )
+        budget = (
+            self.max_input_tokens
+            - max(
+                self._input_tokens(self._summary_messages("")),
+                self._input_tokens(self._summary_messages("", True)),
+            )
+            - 256
+        )
+        if budget < 1:
+            raise CompressionUnavailable("summary instructions exceed input budget")
+        for _ in range(4):
+            if self._input_tokens(self._summary_messages(transcript)) <= self.max_input_tokens:
+                return await self._summarize_transcript(transcript)
+            chunks = split_transcript(transcript, budget)
+            summaries = [await self._summarize_transcript(chunk, partial=True) for chunk in chunks]
+            transcript = "\n".join(
+                f"history_summary fragment {index}: {body}" for index, body in enumerate(summaries, 1)
+            )
+        raise CompressionUnavailable("summary merge did not converge within its input budget")
 
-    def _find_safe_split_index(self, history: list[dict], min_keep: int) -> int:
-        """Find a safe split index based on turn boundaries.
-
-        Ensures recent messages always start at a new user turn.
-        """
-        if len(history) <= min_keep:
-            return 0
-
-        # Find all turn starts (user messages)
-        turn_starts = [
-            i for i, msg in enumerate(history) if self._identify_message_type(msg) == MessageType.USER
-        ]
-
-        if not turn_starts:
-            return 0
-
-        min_start = len(history) - min_keep
-        for idx in turn_starts:
-            if idx >= min_start:
-                return idx
-
-        return turn_starts[-1]
-
-    def _extract_essential_messages(self, messages: list[dict]) -> list[dict]:
-        """Extract only essential messages (user queries, substantial responses)."""
-        essential = []
-        for msg in messages:
-            msg_type = self._identify_message_type(msg)
-            if msg_type == MessageType.USER:
-                essential.append(msg)
-            elif msg_type == MessageType.ASSISTANT and not msg.get("tool_calls"):
-                content = msg.get("content", "")
-                if len(content) > 100:
-                    essential.append(msg)
-        return essential
+    def split_hot_tail(self, history):
+        """Bound messages and tokens without cutting parallel tool transactions."""
+        n = self.min_messages_to_keep
+        if self.compression_level == CompressionLevel.AGGRESSIVE or not n or not self.max_tail_tokens:
+            return list(history), []
+        cut = max(0, len(history) - n)
+        # Move to a boundary with no outstanding tool calls in the complete prefix.
+        pending, boundaries = set(), [0]
+        for index, message in enumerate(history, 1):
+            pending.update(call.get("id") for call in message.get("tool_calls", []) if call.get("id"))
+            if message.get("role") == "tool":
+                pending.discard(message.get("tool_call_id"))
+            if not pending:
+                boundaries.append(index)
+        if pending:
+            return list(history), []
+        cut = max((index for index in boundaries if index <= cut), default=0)
+        while cut < len(history) and self.calculate_history_tokens(history[cut:]) > self.max_tail_tokens:
+            cut = next((index for index in boundaries if index > cut), len(history))
+        return list(history[:cut]), list(history[cut:])
 
     @staticmethod
-    def _extract_urls(content: str) -> str:
-        urls = re.findall(r"https?://[^\s\)]+", content)
-        return ", ".join(urls[:10]) if urls else ""
-
-    @staticmethod
-    def extract_asset_index(messages: list[dict]) -> str:
-        """Extract structured asset index from history messages.
-
-        Each asset is tagged with its conversation turn number for temporal context.
-        """
-        skills: set = set()
-        references: set = set()
-        user_images: list = []  # [(turn, url)]
-        fetched_urls: list = []  # [(turn, url)]
-        generated_images: list = []  # [(turn, url)]
-        turn = 0
-
-        for msg in messages:
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-
-            if role == "user":
-                turn += 1
-
-            # User-uploaded images
-            if role == "user" and "[User-uploaded images]" in content:
-                after = content.split("[User-uploaded images]")[-1]
-                for url in re.findall(r"https?://\S+", after):
-                    user_images.append((turn, url))
-
-            # Tool calls: fetchurl URLs, skill get/get_ref (including legacy names)
-            if role == "assistant" and msg.get("tool_calls"):
-                for tc in msg.get("tool_calls", []):
-                    func = tc.get("function", {})
-                    fname = func.get("name", "")
-                    try:
-                        args = json.loads(func.get("arguments", "{}"))
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                    if fname == "fetchurl" and args.get("url"):
-                        fetched_urls.append((turn, args["url"]))
-                    elif fname in ("skill", "skill_manager"):
-                        action = args.get("action", "")
-                        if action == "get" and args.get("name"):
-                            skills.add(args["name"])
-                        elif action == "get_ref" and args.get("ref_filename"):
-                            references.add(args["ref_filename"])
-
-            # Tool results: image generation output
-            if role == "tool":
+    def skill_reload_index(messages: list[dict]) -> list[dict]:
+        rows = [row for message in messages for row in message.get("skill_reloads", [])]
+        rows.extend(args for _, args in skill_loads(messages, include_unloaded=True))
+        # A requested guide is a reload hint, never proof that its tools may be restored.
+        for message in messages:
+            for call in message.get("tool_calls", []):
+                function = call.get("function", {})
+                if function.get("name") not in ("skill", "skill_manager"):
+                    continue
                 try:
-                    data = json.loads(content)
-                    if isinstance(data, dict):
-                        for img in data.get("images", []):
-                            if isinstance(img, dict) and img.get("image_path"):
-                                generated_images.append((turn, img["image_path"]))
-                        if data.get("image_path") and "images" not in data:
-                            generated_images.append((turn, data["image_path"]))
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                    args = json.loads(function.get("arguments", "{}"))
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(args, dict) and args.get("action") in ("get", "get_ref") and args.get("name"):
+                    rows.append(args)
+        rows = [{key: row[key] for key in ("action", "name", "ref_filename") if row.get(key)} for row in rows]
+        return list({(row.get("name"), row.get("ref_filename")): row for row in rows}.values())[-50:]
 
-        parts = []
-        if skills:
-            parts.append(f"- Active skills:{', '.join(sorted(skills))}")
-        if references:
-            parts.append(f"- loadedReference files:{', '.join(sorted(references))}")
-        if user_images:
-            seen = {}
-            for t, url in user_images:
-                if url not in seen:
-                    seen[url] = t
-            parts.append("- User images:" + ", ".join(f"{url}(turn {t})" for url, t in seen.items()))
-        if fetched_urls:
-            seen = {}
-            for t, url in fetched_urls:
-                if url not in seen:
-                    seen[url] = t
-            parts.append("- Fetched URLs:" + ", ".join(f"{url}(turn {t})" for url, t in seen.items()))
-        if generated_images:
-            seen = {}
-            for t, url in generated_images:
-                if url not in seen:
-                    seen[url] = t
-            parts.append(
-                f"- Generated images ({len(seen)} total):"
-                + ", ".join(f"{url}(turn {t})" for url, t in seen.items())
-            )
+    @staticmethod
+    def delegation_receipts(messages: list[dict]) -> list[dict]:
+        """Carry exact task identities across repeated summary replacements."""
+        latest = {}
+        for message in messages:
+            rows = list(message.get("delegation_receipts") or [])
+            if message.get("role") == "tool":
+                try:
+                    data = json.loads(message.get("content", ""))
+                except (ValueError, TypeError):
+                    data = None
+                if isinstance(data, dict) and data.get("type") == "sub_agent_receipt":
+                    rows.append(data)
+            for row in rows:
+                if not isinstance(row, dict) or not row.get("task_id"):
+                    continue
+                key = (row.get("owner"), row["task_id"])
+                latest.pop(key, None)
+                latest[key] = row
+        return list(latest.values())[-10:]
 
-        return "[Session asset index]\n" + "\n".join(parts) if parts else ""
+    @staticmethod
+    def extract_asset_index(messages):
+        return render_index(
+            messages,
+            HistoryCompressor.delegation_receipts(messages),
+            HistoryCompressor.skill_reload_index(messages),
+            COMPRESSION_ASSET_INDEX_CHARS,
+        )[0]
 
-    # --- Main compression ---
-
-    async def compress_history(self, history: list[dict]) -> list[dict]:
-        """Compress conversation history based on the configured compression level.
-
-        Separates system prompt, compresses older messages, keeps recent ones intact.
-        Summary messages use role=assistant so they survive _sanitize_history on reload.
-        Returns the compressed history list.
-        """
+    async def compress_history(self, history):
+        """Replace history only after a complete, smaller, validated summary."""
         if not self.should_compress(history):
             return history
-
-        # Separate system prompt from conversation
-        system_msg = None
-        conversation = history
-        if history and history[0].get("role") == "system":
-            system_msg = history[0]
-            conversation = history[1:]
-
-        if not conversation:
-            return history
-
+        system = [message for message in history if message.get("role") == "system"]
+        conversation = [message for message in history if message.get("role") != "system"]
+        prepared = unload_skill_documents(conversation)
         original_tokens = self.calculate_history_tokens(conversation)
-
-        # Extract asset index from ALL messages before compression
-        asset_index = self.extract_asset_index(conversation)
-
-        # Split at turn boundary
-        split_idx = self._find_safe_split_index(conversation, self.min_messages_to_keep)
-        older_messages = conversation[:split_idx]
-        recent_messages = conversation[split_idx:]
-
-        # Always compress large tool results in recent messages
-        recent_messages = self.compress_tool_results(recent_messages)
-
-        if not older_messages:
-            final = recent_messages
-            final_tokens = self.calculate_history_tokens(final)
-            if final_tokens < original_tokens:
-                if system_msg:
-                    final = [system_msg] + final
-                self.compression_count += 1
-                self.tokens_saved += original_tokens - final_tokens
-                logger.info(
-                    f"History compressed (tool results only): {original_tokens} → {final_tokens} tokens "
-                    f"({100 * (1 - final_tokens / (original_tokens + 1)):.1f}% reduction)"
-                )
-                return final
+        try:
+            if self.compression_level == CompressionLevel.LIGHT:
+                final = self.compress_tool_results(prepared)
+            else:
+                older, tail = self.split_hot_tail(prepared)
+                if not older:
+                    # Unloading a huge guide can be sufficient without an LLM call.
+                    if self.calculate_history_tokens(prepared) < original_tokens:
+                        self.compression_count += 1
+                        self.tokens_saved += original_tokens - self.calculate_history_tokens(prepared)
+                        self._notify_compacted()
+                        return system + prepared
+                    return history
+                receipts = self.delegation_receipts(conversation)
+                reloads = self.skill_reload_index(prepared)
+                index, assets = render_index(conversation, receipts, reloads, self.asset_index_chars)
+                async with asyncio.timeout(self.timeout_seconds):
+                    summary = await self.summarize_conversation_segment(older)
+                if (
+                    not summary.strip()
+                    or summary.startswith("Summary generation failed:")
+                    or summary == "Summary is empty"
+                ):
+                    raise CompressionUnavailable("summary is unavailable")
+                content = f"<summary>\n{summary}\n</summary>\n{CONTINUATION_NOTE}"
+                if index:
+                    content += "\n\n" + index
+                final = [
+                    {
+                        "role": "user",
+                        "content": content,
+                        "delegation_receipts": receipts,
+                        "skill_reloads": reloads,
+                        "context_assets": assets,
+                    }
+                ] + tail
+        except (TimeoutError, CompressionUnavailable, ValueError) as exc:
+            self._disabled_for_run = True
+            logger.warning("Context compression skipped ({}); original history retained", type(exc).__name__)
             return history
-
-        if self.compression_level == CompressionLevel.LIGHT:
-            # LIGHT: only compress tool outputs, keep structure
-            final = self.compress_tool_results(older_messages) + recent_messages
-
-        elif self.compression_level in (CompressionLevel.MODERATE, CompressionLevel.AGGRESSIVE):
-            # MODERATE/AGGRESSIVE: full replacement — summary + asset index
-            compressed_tool = self.compress_tool_results(conversation)
-            summary = await self.summarize_conversation_segment(compressed_tool)
-
-            summary_content = f"<summary>\n{summary}\n</summary>"
-            if asset_index:
-                summary_content += f"\n\n{asset_index}"
-
-            final = [
-                {
-                    "role": "user",
-                    "content": summary_content,
-                }
-            ]
-
-        else:
-            final = older_messages + recent_messages
-
-        # Calculate tokens for fair comparison
         final_tokens = self.calculate_history_tokens(final)
-        if system_msg:
-            final = [system_msg] + final
+        if final_tokens >= original_tokens:
+            if self.compression_level != CompressionLevel.LIGHT:
+                self._disabled_for_run = True
+            return history
         self.compression_count += 1
         self.tokens_saved += original_tokens - final_tokens
-
+        self._notify_compacted()
         logger.info(
-            f"History compressed: {original_tokens} → {final_tokens} tokens "
-            f"({100 * (1 - final_tokens / (original_tokens + 1)):.1f}% reduction)"
+            "History compressed: {} -> {} tokens, hot tail={} messages",
+            original_tokens,
+            final_tokens,
+            0 if self.compression_level == CompressionLevel.LIGHT else len(tail),
         )
-        return final
+        return system + final

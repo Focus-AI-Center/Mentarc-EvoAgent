@@ -14,11 +14,12 @@ import json
 import re
 import time
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
-from agents import Agent as _SDKAgent
 from agents import ModelSettings, Runner
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -32,58 +33,30 @@ from configs.settings import (
     PROXY_SERVER,
 )
 from core.agent_compat import convert_tools
+from core.context_compaction import CompactingAgent as _SDKAgent
 from core.mcp import MCPToolManager
 from core.plugins import initialize_plugins
 from core.plugins.ask_user import AskUserQuestionTool
 from core.plugins.internal import MemoryTool, SkillTool, UpdateUserProfileTool
 from core.plugins.todo_manager import TodoManagerTool
+from core.runtime.events import _stream_sdk_events
+from core.runtime.execution import SDKRunSession
+from core.runtime.history import (
+    _history_to_sdk_input,
+    _prompt_body,
+    _sanitize_history,
+)
+from core.runtime.interruption import TurnPersistence, persist_on_interrupt
+from core.runtime.sdk_client import _ensure_sdk_client
 from core.skills.manager import SkillManager
+from core.skills.tool_mounting import SkillToolMounter
 from core.tool_search import configure_agent_tools
 from utils.context_assets import memory_index_context, skill_location_context
 from utils.history_compressor import HistoryCompressor
 from utils.logger import logger
+from utils.skill_history import loaded_skill_names
 from utils.workspace import Workspace
 from utils.ws_call import ws_call
-
-# Lazy imports from agent.py to avoid circular dependency
-_prompt_body = None
-_sanitize_history = None
-_stream_sdk_events = None
-_history_to_sdk_input = None
-_sdk_result_to_history = None
-_ensure_sdk_client = None
-
-
-def _ensure_imports():
-    global _prompt_body, _sanitize_history, _stream_sdk_events
-    global _history_to_sdk_input, _sdk_result_to_history, _ensure_sdk_client
-    if _prompt_body is None:
-        from core.agent import (
-            _ensure_sdk_client as _esc,
-        )
-        from core.agent import (
-            _history_to_sdk_input as _htsi,
-        )
-        from core.agent import (
-            _prompt_body as _pb,
-        )
-        from core.agent import (
-            _sanitize_history as _sh,
-        )
-        from core.agent import (
-            _sdk_result_to_history as _srth,
-        )
-        from core.agent import (
-            _stream_sdk_events as _sse,
-        )
-
-        _prompt_body = _pb
-        _sanitize_history = _sh
-        _stream_sdk_events = _sse
-        _history_to_sdk_input = _htsi
-        _sdk_result_to_history = _srth
-        _ensure_sdk_client = _esc
-
 
 # ---------------------------------------------------------------------------
 # Agent type config (parsed from .md frontmatter)
@@ -193,6 +166,9 @@ class SubAgentRunner:
         self.session_id = f"sa_{type_key}_{session_id}"
         self.workspace = workspace or Workspace(user_id)
         self.skill_manager = SkillManager(workspace=self.workspace)
+        self._persistence = TurnPersistence(
+            self.workspace, user_id, self.session_id, metadata={"agent_type": self.config.name}
+        )
         # Callable returning parent-agent history (for ParentHistoryTool).
         # None when invoked directly via the /api/sub-agent endpoint.
         self.parent_history_fn = parent_history_fn
@@ -219,7 +195,6 @@ class SubAgentRunner:
         )
 
     async def _build_system_prompt(self, context: str = "") -> str:
-        _ensure_imports()
         prompt = self.config.body
 
         user_raw = await ws_call(self.workspace, "read_prompt", "USER")
@@ -242,7 +217,12 @@ class SubAgentRunner:
 
     def _build_tools(self) -> list:
         plugin_names = list(dict.fromkeys(DEFAULT_SUB_AGENT_TOOLS + self.config.required_tools))
-        tools = initialize_plugins(plugin_names, user_id=self.user_id, workspace=self.workspace)
+        tools = initialize_plugins(
+            plugin_names,
+            user_id=self.user_id,
+            session_id=self.session_id,
+            workspace=self.workspace,
+        )
 
         tools.append(
             SkillTool(
@@ -273,10 +253,12 @@ class SubAgentRunner:
     async def _inject_skills(self, history: list[dict]) -> None:
         if not self.config.skills:
             return
-        _ensure_imports()
-        all_skills = self.skill_manager.get_all_skills(self.user_id)
+        all_skills = await asyncio.to_thread(self.skill_manager.get_all_skills, self.user_id)
+        loaded = set(loaded_skill_names(history))
 
         for skill_name in self.config.skills:
+            if skill_name in loaded:
+                continue
             skill = all_skills.get(skill_name)
             if skill is None:
                 logger.warning(f"Sub-agent skill '{skill_name}' not found")
@@ -293,7 +275,7 @@ class SubAgentRunner:
                         f"\n- `{fn}` → skill(action='get_ref', name='{skill.name}', ref_filename='{fn}')"
                     )
 
-            synthetic_id = f"skill_autoload_{skill.name}"
+            synthetic_id = f"skill_autoload_{uuid4().hex}"
             history.extend(
                 [
                     {
@@ -367,20 +349,26 @@ class SubAgentRunner:
             logger.warning(f"Completion check failed, fallback to markers: {e}")
             return any(m in final_text for m in self._COMPLETION_MARKERS)
 
+    @persist_on_interrupt
     async def run_stream(self, user_input: str, context: str = "") -> AsyncGenerator[dict, None]:
-        _ensure_imports()
         _ensure_sdk_client()
 
         t_start = time.monotonic()
         self.needs_followup = False
         self._final_text = ""
+        self.failure = None
 
         # 1. Build system prompt
         system_prompt = await self._build_system_prompt(context)
 
         # 2. Build tools
         tools = self._build_tools()
-        sdk_tools = convert_tools(tools)
+        mounter = SkillToolMounter(
+            tools,
+            user_id=self.user_id,
+            session_id=self.session_id,
+            workspace=self.workspace,
+        )
 
         # 3. Load session history
         history = []
@@ -388,6 +376,8 @@ class SubAgentRunner:
         if history_data and isinstance(history_data, dict):
             raw = history_data.get("conversation", [])
             history = _sanitize_history(raw)
+
+        self._persistence.loaded(lambda: history)
 
         # 3b. Compress history if needed
         compressor = HistoryCompressor(
@@ -397,23 +387,25 @@ class SubAgentRunner:
                 base_url=OPENAI_API_BASE,
             ),
         )
+        compressor.compaction_callbacks.append(mounter.on_context_compacted)
         if compressor.should_compress(history):
             history = await compressor.compress_history(history)
             logger.info(f"Sub-agent history compressed: {len(history)} messages remaining")
 
         # 4. Auto-inject configured skills
         await self._inject_skills(history)
+        await mounter.restore(history)
 
         # 5. Create SDK Agent
         agent = _SDKAgent(
             name=f"SubAgent-{self.config.name}",
             instructions=system_prompt,
             model=self.config.model or MODEL,
-            tools=sdk_tools,
+            tools=convert_tools(tools),
             model_settings=ModelSettings(temperature=0.5, max_tokens=16000),
             tool_use_behavior="run_llm_again",
         )
-        await configure_agent_tools(
+        catalog = await configure_agent_tools(
             agent,
             loader=MCPToolManager(
                 user_id=self.user_id,
@@ -422,11 +414,15 @@ class SubAgentRunner:
             ).create_tools,
             initially_loaded=self.config.required_tools,
         )
+        await mounter.bind(agent, catalog)
 
         # Add user message to history before running
         history.append({"role": "user", "content": user_input})
+        self._persistence.user_message_added()
 
         input_messages = _history_to_sdk_input(history)
+        session = SDKRunSession(agent, compressor, history, tools, event_stream=_stream_sdk_events)
+        self._persistence.loaded(session.snapshot)
 
         # 6. Stream events
         yield {"code": 3, "content": "stream_start"}
@@ -434,19 +430,21 @@ class SubAgentRunner:
         result = None
         try:
             async with asyncio.timeout(self.config.timeout):
-                result = Runner.run_streamed(
-                    agent,
-                    input=input_messages,
-                    max_turns=self.config.max_steps,
+                session.start(
+                    Runner.run_streamed, agent, input=input_messages, max_turns=self.config.max_steps
                 )
-                async for event in _stream_sdk_events(result, tools):
-                    yield event
-                    if event.get("code") == 2:
-                        self._final_text += event.get("content", "")
+                result = session.result
+                async with aclosing(session.stream()) as events:
+                    async for event in events:
+                        if event.get("code") == 2:
+                            self._final_text += event.get("content", "")
+                        yield event
         except TimeoutError:
+            self.failure = f"Sub-agent timed out ({self.config.timeout}s)"
             logger.warning(f"Sub-agent {self.config.name} timed out")
             yield {"code": 2, "content": f"\n\n[Sub-agent timed out({self.config.timeout}s)]"}
         except Exception as e:
+            self.failure = str(e)
             logger.error(f"Sub-agent {self.config.name} error: {e}", exc_info=True)
             yield {"code": 2, "content": f"\n\n[Sub-agent error: {e}]"}
 
@@ -466,22 +464,10 @@ class SubAgentRunner:
             ),
         }
 
-        yield {"code": 3, "content": "stream_end"}
-
-        # 9. Save session history
+        # Save through the same component used by cancellation cleanup.
         try:
-            if result:
-                final_history = _sdk_result_to_history(history, result)
-            else:
-                final_history = history
-            history_record = {
-                "user_id": self.user_id,
-                "session_id": self.session_id,
-                "agent_type": self.config.name,
-                "timestamp": datetime.now(UTC).isoformat(),
-                "conversation": final_history,
-                "message_count": len(final_history),
-            }
-            await ws_call(self.workspace, "history_save", self.session_id, history_record)
-        except Exception as e:
-            logger.error(f"Sub-agent history save failed: {e}")
+            await self._persistence.save(session.snapshot() if result else history)
+        except Exception:
+            self.failure = "Sub-agent history could not be saved"
+            logger.exception("Sub-agent history save failed")
+        yield {"code": 3, "content": "stream_end"}

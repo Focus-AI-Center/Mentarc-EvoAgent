@@ -63,6 +63,6 @@ First call `skill(action="list")`. Propose only workflows with at least two tool
 [/SKILL_PROPOSAL]
 ```
 
-Briefly explain the reusable pattern and invite additions. Short skills may omit `references` or use `{}`. Aim for 10-30 main-document lines; if the workflow exceeds roughly 50 lines or has long rules, templates or examples, split details by topic. State when to read each reference, include full contents and use valid JSON. Never call `save` or `ref_set` before confirmation. If no workflow qualifies, omit the proposal block.
+Briefly explain the reusable pattern and invite additions. Short skills may omit `references` or use `{}`. Aim for 10-30 main-document lines; if the workflow exceeds roughly 50 lines or has long rules, templates or examples, split details by topic. State when to read each reference, include full contents and use valid JSON. Never mutate skills (`save`, `patch`, `delete`, `ref_set` or `ref_del`) before confirmation. If no workflow qualifies, omit the proposal block.
 
 Do not invent facts. Keep the final report concise.

@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from contextlib import aclosing
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -53,6 +54,7 @@ async def chat(request: AgentRequest, req: Request):
         system_prompt=request.prompt,
         model=request.modelType,
         workspace=workspace,
+        task_id=request.taskId,
     )
 
     # Read user profile for input-side extraction
@@ -66,35 +68,37 @@ async def chat(request: AgentRequest, req: Request):
         user_profile = {}
 
     async def generate():
-        full_response = ""
+        responses = {}
         try:
-            async for event in agent.run_stream(user_input):
-                event["requestId"] = request_id
-                if event.get("code") == 2:
-                    full_response += event.get("content", "")
+            async with aclosing(agent.run_stream(user_input)) as source:
+                async for event in source:
+                    event["requestId"] = request_id
+                    if event.get("code") == 2:
+                        key = (event.get("source_agent", ""), event.get("task_id", ""))
+                        responses[key] = responses.get(key, "") + event.get("content", "")
 
-                # After stream_start, emit input-side extraction (code 11)
-                # Try all input extractors (not just matched_skill) because the
-                # initial skill match may differ from what the agent actually uses.
-                if event.get("code") == 3 and event.get("content") == "stream_start":
+                    # After stream_start, emit input-side extraction (code 11)
+                    # Try all input extractors (not just matched_skill) because the
+                    # initial skill match may differ from what the agent actually uses.
+                    if event.get("code") == 3 and event.get("content") == "stream_start":
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        for _ext_fn in INPUT_EXTRACTORS.values():
+                            repl = _ext_fn(user_input, user_profile)
+                            if repl:
+                                yield f"data: {json.dumps({'code': 11, 'content': json.dumps(repl, ensure_ascii=False), 'requestId': request_id}, ensure_ascii=False)}\n\n"
+                        continue
+
+                    # Before stream_end, emit output-side extraction (code 11)
+                    # Try all output extractors (not just matched_skill) because the
+                    # agent may load additional skills mid-session via skill.
+                    if event.get("code") == 3 and event.get("content") == "stream_end":
+                        for full_response in responses.values():
+                            for _ext_fn in OUTPUT_EXTRACTORS.values():
+                                analysis = _ext_fn(full_response)
+                                if analysis:
+                                    yield f"data: {json.dumps({'code': 11, 'content': json.dumps(analysis, ensure_ascii=False), 'requestId': request_id}, ensure_ascii=False)}\n\n"
+
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                    for _ext_fn in INPUT_EXTRACTORS.values():
-                        repl = _ext_fn(user_input, user_profile)
-                        if repl:
-                            yield f"data: {json.dumps({'code': 11, 'content': json.dumps(repl, ensure_ascii=False), 'requestId': request_id}, ensure_ascii=False)}\n\n"
-                    continue
-
-                # Before stream_end, emit output-side extraction (code 11)
-                # Try all output extractors (not just matched_skill) because the
-                # agent may load additional skills mid-session via skill.
-                if event.get("code") == 3 and event.get("content") == "stream_end":
-                    if full_response:
-                        for _ext_fn in OUTPUT_EXTRACTORS.values():
-                            analysis = _ext_fn(full_response)
-                            if analysis:
-                                yield f"data: {json.dumps({'code': 11, 'content': json.dumps(analysis, ensure_ascii=False), 'requestId': request_id}, ensure_ascii=False)}\n\n"
-
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.error(f"Stream error: {e}", exc_info=True)
             yield f"data: {json.dumps({'code': 3, 'content': f'error: {str(e)}', 'requestId': request_id})}\n\n"

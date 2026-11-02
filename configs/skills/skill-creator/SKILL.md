@@ -85,7 +85,20 @@ Reference keys are relative to `references/`, including nested paths. Provide co
 
 Add or update a text reference using `skill(action="ref_set", name="write-seo-report", ref_filename="report-template.md", ref_content="Complete template text")`. This writes under `references/`; use code execution to create scripts or binary assets at their appropriate skill-relative paths.
 
-For iteration, save the same skill name with the complete updated main text and changed references. Matching references are replaced; omitted files are retained. Delete an obsolete reference with `ref_del`.
+For an authorized small update, first read the current target, then patch just the changed fragment:
+
+```python
+skill(action="patch", name="write-seo-report",
+      old_string="3. Search sources and write the report.",
+      new_string="3. Search sources, verify citations and write the report.")
+skill(action="patch", name="write-seo-report", ref_filename="report-template.md",
+      old_string="Include a title, summary, findings and source links.",
+      new_string="Include a title, summary, findings, limitations and source links.")
+```
+
+`old_string` must be nonempty and occur exactly once in the target body. Include surrounding text if ambiguous. `new_string` is required; an explicit empty string deletes the fragment. Main-document patches preserve YAML metadata. Each patch updates one existing file and rejects concurrent changes; reload with `get` or `get_ref` after a patch or conflict.
+
+For a complete rewrite or metadata changes, save the same skill name with the complete updated main text and changed references. Matching references are replaced; omitted files are retained. Delete an obsolete reference with `ref_del`. During extraction, propose changes for confirmation before using any write action, including `patch`.
 
 ## Validation
 

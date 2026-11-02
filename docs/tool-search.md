@@ -50,7 +50,16 @@ TOOLSEARCH_ALWAYS_LOADED=memory,skill,update_user_profile,todo_manager,ask_user_
 
 `TOOLSEARCH_ALWAYS_LOADED` selects resident tools from existing candidates; it does not enable a plugin. MCP tools become candidates after discovery. Other tools, including `schedule_manager`, can be loaded by search.
 
-Matched skills and sub-agent configurations preload `required_tools`, including supported aliases. Reading a skill manually does not install an unavailable dependency.
+Matched skills, configured child skills and manual `skill(get)` calls grant
+their `required_tools`, including supported aliases. Missing built-in plugin
+instances are initialized for the current identity; MCP requirements still use
+configured services. A reference-first read includes its main guide. This does
+not install software packages or enable an unconfigured MCP service.
+
+Skill-specific visibility grants are tracked separately from resident schemas
+and independent search results. Compression removes skill-introduced tools and
+grants together with their original instructions; reloading the guide restores
+them. See [agent coordination](agent-coordination.md).
 
 Visibility and MCP caches belong to one SDK run. They are not shared across users, parent/child agents or later requests. Saved tool history does not bypass the current configuration.
 

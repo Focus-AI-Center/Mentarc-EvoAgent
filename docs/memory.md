@@ -139,7 +139,7 @@ Creating an independent file, writing grouped content and updating the index are
 
 ## History, skills and session review
 
-Session JSON stores conversation messages and tool activity. History compression replaces older messages with a continuation summary and an asset index; it is separate from durable memory. Skills package reusable procedures under `skills/`, with metadata, main text and optional supporting files. See [skill extraction](skill-extraction.md).
+Session JSON stores conversation messages and tool activity. History compression replaces conversation detail with a continuation summary and an asset index; it is separate from durable memory. Skill guides are replaced with reload instructions before summarization, and their tool grants are cleared together. Recent delegation receipts preserve exact task identities across compression. See [agent coordination](agent-coordination.md) and [skill extraction](skill-extraction.md).
 
 During a conversation, the main Agent records individual useful signals with `memory`. The "Update memory" action runs `SessionUpdater`; explicit analytical review requests can use the `session-reviewer` sub-agent. Both compare existing state, update reliable profile/memory facts and propose skills for user confirmation.
 

@@ -9,13 +9,11 @@ import json
 import re
 import time
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from datetime import UTC, datetime
+from uuid import uuid4
 
-import httpx
-from agents import Agent as _SDKAgent
-from agents import ModelSettings, Runner, set_default_openai_client
-from agents.items import MessageOutputItem, ToolCallItem, ToolCallOutputItem
-from openai import AsyncOpenAI  # used by _ensure_sdk_client
+from agents import ModelSettings, Runner
 
 from configs.prompts import prompts
 from configs.settings import (
@@ -24,11 +22,10 @@ from configs.settings import (
     ENABLE_METRICS,
     MAX_STEPS,
     MODEL,
-    OPENAI_API_BASE,
-    OPENAI_API_KEY,
-    PROXY_SERVER,
 )
 from core.agent_compat import convert_tools
+from core.context_compaction import CompactingAgent as _SDKAgent
+from core.delegation import automatic_task_id, stream_handoff
 from core.mcp import MCPToolManager
 from core.plugins import PLUGIN_CLASSES, initialize_plugins
 from core.plugins.ask_user import AskUserQuestionTool
@@ -36,55 +33,33 @@ from core.plugins.internal import (
     MemoryTool,
     ScheduleManagerTool,
     SkillTool,
+    SubAgentParams,
     SubAgentTool,
     UpdateUserProfileTool,
 )
 from core.plugins.todo_manager import TodoManagerTool
-from core.skills import Skill
+from core.runtime.events import _attach_delivery_events as _attach_delivery_events
+from core.runtime.events import _find_sub_agent_tool, _stream_sdk_events
+from core.runtime.execution import SDKRunSession
+from core.runtime.history import (
+    _history_to_sdk_input,
+    _prompt_body,
+    _sanitize_history,
+    _sdk_result_to_history,
+)
+from core.runtime.interruption import TurnPersistence, persist_on_interrupt
+from core.runtime.sdk_client import _create_async_client, _ensure_sdk_client
+from core.skills import Skill, skill_to_md
 from core.skills.manager import SkillManager
 from core.skills.matcher import SkillMatcher
+from core.skills.tool_mounting import SkillToolMounter
 from core.tool_search import configure_agent_tools
 from utils.context_assets import memory_index_context, skill_location_context
 from utils.history_compressor import HistoryCompressor
 from utils.logger import logger
-from utils.tool_names import canonical_tool_name
+from utils.skill_history import loaded_skill_names
 from utils.workspace import Workspace
 from utils.ws_call import ws_call
-
-# --- SDK client initialization ---
-
-_sdk_client_initialized = False
-
-
-def _create_async_client() -> AsyncOpenAI:
-    """Create a proxy-aware AsyncOpenAI client (for HistoryCompressor)."""
-    if PROXY_SERVER:
-        return AsyncOpenAI(
-            api_key=OPENAI_API_KEY,
-            base_url=OPENAI_API_BASE,
-            http_client=httpx.AsyncClient(proxy=PROXY_SERVER),
-        )
-    return AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_API_BASE)
-
-
-def _ensure_sdk_client():
-    """Set up the default OpenAI client for the Agents SDK (once)."""
-    global _sdk_client_initialized
-    if _sdk_client_initialized:
-        return
-    if PROXY_SERVER:
-        client = AsyncOpenAI(
-            api_key=OPENAI_API_KEY,
-            base_url=OPENAI_API_BASE,
-            http_client=httpx.AsyncClient(proxy=PROXY_SERVER),
-        )
-    else:
-        client = AsyncOpenAI(
-            api_key=OPENAI_API_KEY,
-            base_url=OPENAI_API_BASE,
-        )
-    set_default_openai_client(client)
-    _sdk_client_initialized = True
 
 
 class EvoAgent:
@@ -102,13 +77,16 @@ class EvoAgent:
         system_prompt: str = None,
         model: str = None,
         workspace=None,
+        task_id: str | None = None,
     ):
         self.user_id = user_id
         self.session_id = session_id
         self.model = model or MODEL
+        self.task_id = task_id
 
         # Per-user workspace (local filesystem)
         self.workspace = workspace or Workspace(user_id)
+        self._persistence = TurnPersistence(self.workspace, user_id, session_id)
 
         # System prompt is resolved lazily in ``load_session`` so the SOUL
         # read (a remote MinIO GET in MINIO mode) joins the same
@@ -156,9 +134,17 @@ class EvoAgent:
         self.tools.append(
             SubAgentTool(
                 user_id=user_id,
+                session_id=session_id,
                 workspace=self.workspace,
                 parent_history_fn=lambda: self.history,
             )
+        )
+
+        self._skill_tools = SkillToolMounter(
+            self.tools,
+            user_id=user_id,
+            session_id=session_id,
+            workspace=self.workspace,
         )
 
         # History compressor
@@ -166,6 +152,7 @@ class EvoAgent:
             compression_level=COMPRESSION_LEVEL,
             async_client=_create_async_client(),
         )
+        self._compressor.compaction_callbacks.append(self._skill_tools.on_context_compacted)
 
         # State
         self.history: list[dict] = []
@@ -205,6 +192,8 @@ class EvoAgent:
             raw = history_data.get("conversation", [])
             self.history = _sanitize_history(raw)
             logger.info(f"Loaded {len(self.history)} messages for session {self.session_id}")
+
+        self._persistence.loaded(lambda: self.history)
 
         self.base_system_prompt = (
             self._system_prompt_override if self._system_prompt_override else _prompt_body(soul_text)
@@ -267,7 +256,6 @@ class EvoAgent:
     def _is_skill_meta_request(user_input: str) -> bool:
         """Detect if the user is asking about skill management (create/edit/delete/list),
         not requesting execution of an existing skill."""
-        import re
 
         # Match explicit skill-management requests rather than workflow execution.
         meta_pattern = (
@@ -296,7 +284,8 @@ class EvoAgent:
             )
             self.matched_skill = result.skill
             self._match_result = result
-            self._ensure_tools(result.skill.required_tools)
+            if result.skill.requires_sub_agent:
+                return result.skill
             if not self._skill_in_history(result.skill.name):
                 # First activation this session: inject into history so instructions
                 # persist across turns (mirroring skill get), with natural
@@ -304,58 +293,40 @@ class EvoAgent:
                 self.skill_manager.increment_usage(self.user_id, result.skill.name)
                 self._inject_skill_into_history(result.skill)
                 self._skill_injected = True
+            await self._skill_tools.on_loaded(result.skill.name, skill_to_md(result.skill))
         return result.skill
 
     async def _handle_sub_agent_handoff(self, user_input: str):
-        """Run a trigger-based sub-agent handoff (paper Appendix A Phase 2.5).
-
-        Streams the sub-agent's events directly to the caller, then appends the
-        resulting messages to the main agent's history so future turns see the
-        handoff outcome. The main agent's ReAct loop is bypassed for this turn.
-        """
-        from core.sub_agent import SubAgentRunner
-
+        """Automatic routing uses the same task execution and receipt protocol."""
+        started = time.monotonic()
         skill = self._match_result.skill
-        logger.info(
-            f"Phase 2.5 handoff: skill '{skill.name}' triggered sub-agent "
-            f"'{skill.sub_agent_name or skill.name}'"
+        params = SubAgentParams(
+            task=user_input,
+            agent_type=skill.sub_agent_name or skill.name,
+            task_id=self.task_id or automatic_task_id(skill.name),
         )
-
-        yield {"code": 3, "content": "stream_start"}
-
-        runner = SubAgentRunner.from_skill(
-            skill,
-            user_id=self.user_id,
-            session_id=self.session_id,
-            workspace=self.workspace,
-            parent_history_fn=lambda: self.history,
-        )
-
-        # Relay all sub-agent events transparently and capture final text so we
-        # can merge the turn into the main agent's history.
-        final_text_parts: list[str] = []
-        try:
-            async for event in runner.run_stream(user_input):
-                if event.get("code") == 2:
-                    final_text_parts.append(str(event.get("content", "")))
-                # Don't forward sub-agent's stream_start/stream_end — we wrap it.
-                if event.get("code") == 3 and event.get("content") in ("stream_start", "stream_end"):
-                    continue
-                yield event
-        except Exception as e:
-            logger.error(f"Sub-agent handoff failed: {e}")
-            yield {"code": 2, "content": f"Sub-agent error: {str(e)}"}
-
-        # Merge handoff outcome into main history
-        final_text = "".join(final_text_parts).strip()
+        # Parent-history reads must see this turn, just as explicit delegation does.
         self.history.append({"role": "user", "content": user_input})
-        if final_text:
-            self.history.append({"role": "assistant", "content": final_text})
-
-        yield {"code": 3, "content": "stream_end"}
-
-        # Persist history so next turn sees the handoff
+        if getattr(self, "_persistence", None):
+            self._persistence.user_message_added()
+        yield {"code": 3, "content": "stream_start"}
+        tool = _find_sub_agent_tool(self.tools)
+        async with aclosing(stream_handoff(tool, params, skill, self.history)) as events:
+            async for event in events:
+                yield event
         await self._post_session()
+        if ENABLE_METRICS:
+            yield {
+                "code": 6,
+                "content": json.dumps(
+                    {
+                        "total_ms": int((time.monotonic() - started) * 1000),
+                        "skill": {"name": skill.name, "type": "handoff"},
+                        "task_id": params.task_id,
+                    }
+                ),
+            }
+        yield {"code": 3, "content": "stream_end"}
 
     def _skill_in_history(self, skill_name: str) -> bool:
         """Check if skill instructions already exist in history as a skill tool result.
@@ -364,13 +335,7 @@ class EvoAgent:
         SkillTool._action_get(), covering both synthetic injections and
         genuine agent-initiated skill get calls.
         """
-        skill_header = f"Skill document `{skill_name}/SKILL.md`"
-        return any(
-            msg.get("role") == "tool"
-            and msg.get("name") == "skill"
-            and skill_header in msg.get("content", "")
-            for msg in self.history
-        )
+        return skill_name in loaded_skill_names(self.history)
 
     def _format_skill_content(self, skill: "Skill") -> str:
         """Format skill content matching SkillTool._action_get() output."""
@@ -392,7 +357,7 @@ class EvoAgent:
         processing user_input, so skill instructions are available this turn.
         Mirrors skill(get); old entries expire via history compression.
         """
-        synthetic_id = f"skill_autoload_{skill.name}"
+        synthetic_id = f"skill_autoload_{uuid4().hex}"
         self.history.extend(
             [
                 {
@@ -441,15 +406,6 @@ class EvoAgent:
                     synthetic = [self.history.pop(i), self.history.pop(i)]
                     self.history[i + 1 : i + 1] = synthetic
                 break
-
-    def _ensure_tools(self, required_tools: list[str]):
-        """Ensure all required tools for a skill are loaded."""
-        current_names = {getattr(t, "name", "") for t in self.tools}
-        missing = [t for t in required_tools if t not in current_names]
-        if missing:
-            new_tools = initialize_plugins(missing, user_id=self.user_id, workspace=self.workspace)
-            self.tools.extend(new_tools)
-            logger.info(f"Auto-loaded tools for skill: {missing}")
 
     def _inject_history_todos(self):
         """Inject last todo snapshot from session history into todo_manager.
@@ -506,11 +462,11 @@ class EvoAgent:
             ),
             tool_use_behavior="run_llm_again",
         )
-        await configure_agent_tools(
+        catalog = await configure_agent_tools(
             agent,
             loader=mcp_manager.create_tools,
-            initially_loaded=self.matched_skill.required_tools if self.matched_skill else (),
         )
+        await self._skill_tools.bind(agent, catalog)
         return agent
 
     async def _stream_agent_events(self, user_input: str) -> AsyncGenerator[dict, None]:
@@ -521,16 +477,30 @@ class EvoAgent:
 
         # Add user message to history BEFORE running agent
         self.history.append({"role": "user", "content": user_input})
+        if getattr(self, "_persistence", None):
+            self._persistence.user_message_added()
 
         agent = await self._create_sdk_agent()
-        result = Runner.run_streamed(agent, input=input_messages, max_turns=MAX_STEPS)
+        session = SDKRunSession(
+            agent,
+            self._compressor,
+            self.history,
+            self.tools,
+            on_history=lambda history: setattr(self, "history", history),
+            event_stream=_stream_sdk_events,
+        )
+        if getattr(self, "_persistence", None):
+            self._persistence.user_message_added()
+            self._persistence.loaded(session.snapshot)
+        session.start(Runner.run_streamed, agent, input=input_messages, max_turns=MAX_STEPS)
+        try:
+            async with aclosing(session.stream()) as events:
+                async for event in events:
+                    yield event
+        finally:
+            self.history = session.snapshot()
 
-        async for event in _stream_sdk_events(result, self.tools):
-            yield event
-
-        # Append agent's response to history
-        self.history = _sdk_result_to_history(self.history, result)
-
+    @persist_on_interrupt
     async def run_stream(self, user_input: str) -> AsyncGenerator[dict, None]:
         """Run the agent in streaming mode.
 
@@ -546,6 +516,7 @@ class EvoAgent:
         # 2. Compress history if needed (before skill injection)
         if self._compressor.should_compress(self.history):
             self.history = await self._compressor.compress_history(self.history)
+        await self._skill_tools.restore(self.history)
 
         # 3. Skill matching (appends synthetic messages after compressed history)
         self._match_result = None
@@ -569,7 +540,7 @@ class EvoAgent:
         # Emit skill injection as tool card (only when actually injected this turn)
         if self._match_result and self._match_result.skill and self._skill_injected:
             sk = self._match_result.skill
-            synthetic_id = f"skill_autoload_{sk.name}"
+            synthetic_id = self.history[-2]["tool_calls"][0]["id"]
             yield {
                 "code": 4,
                 "content": json.dumps(
@@ -596,16 +567,17 @@ class EvoAgent:
         steps = 0
         tools_used = set()
         try:
-            async for event in self._stream_agent_events(user_input):
-                content = event.get("content", "")
-                if event.get("code") == 4:
-                    steps += 1
-                    try:
-                        info = json.loads(content)
-                        tools_used.add(info.get("name", ""))
-                    except Exception:
-                        pass
-                yield event
+            async with aclosing(self._stream_agent_events(user_input)) as events:
+                async for event in events:
+                    content = event.get("content", "")
+                    if event.get("code") == 4:
+                        steps += 1
+                        try:
+                            info = json.loads(content)
+                            tools_used.add(info.get("name", ""))
+                        except Exception:
+                            pass
+                    yield event
         except Exception as e:
             logger.error(f"Agent execution failed: {e}")
             yield {"code": 2, "content": f"Agent error: {str(e)}"}
@@ -639,264 +611,14 @@ class EvoAgent:
         yield {"code": 3, "content": "stream_end"}
 
     async def _post_session(self):
-        """Async post-session tasks: save history."""
+        """Delegate session storage to the shared persistence component."""
+        persistence = getattr(self, "_persistence", None) or TurnPersistence(
+            self.workspace, self.user_id, self.session_id
+        )
         try:
-            history_record = {
-                "user_id": self.user_id,
-                "session_id": self.session_id,
-                "timestamp": datetime.now(UTC).isoformat(),
-                "conversation": self.history,
-                "message_count": len(self.history),
-            }
-            await ws_call(self.workspace, "history_save", self.session_id, history_record)
-            logger.info(f"Saved {len(self.history)} messages to workspace")
-        except Exception as e:
-            logger.error(f"Post-session tasks failed: {e}")
-
-
-def _find_sub_agent_tool(tools: list):
-    """Find SubAgentTool instance in the tool list (for event flushing)."""
-    for t in tools:
-        if getattr(t, "name", "") == "sub_agent" and hasattr(t, "_sub_events"):
-            return t
-    return None
-
-
-async def _stream_sdk_events(result, tools: list) -> AsyncGenerator[dict, None]:
-    """Stream events from OpenAI Agents SDK run and yield SSE-compatible dicts.
-
-    Maps SDK events to existing SSE codes for frontend compatibility:
-      code 2: text delta
-      code 4: tool_call
-      code 5: tool_result
-      code 7: schedule_manager
-      code 8: html_render
-      code 9: todo_manager progress
-      code 10: ask_user_question
-      code 12: complete sub-agent skill proposals for user confirmation
-    """
-    from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
-
-    # Cache call_id → tool_name for matching tool results to their calls
-    _call_id_to_name: dict[str, str] = {}
-
-    async for event in result.stream_events():
-        if isinstance(event, RawResponsesStreamEvent):
-            # Raw LLM response — extract text deltas
-            data = event.data
-            if hasattr(data, "type") and data.type == "response.output_text.delta":
-                delta = getattr(data, "delta", "")
-                if delta:
-                    yield {"code": 2, "content": delta}
-
-        elif isinstance(event, RunItemStreamEvent):
-            item = event.item
-            if isinstance(item, ToolCallItem):
-                # Tool call started
-                raw = item.raw_item
-                tc_id = getattr(raw, "call_id", "") or ""
-                tc_name = getattr(raw, "name", "") or ""
-                tc_args = getattr(raw, "arguments", "") or ""
-                if tc_id and tc_name:
-                    _call_id_to_name[tc_id] = tc_name
-                yield {
-                    "code": 4,
-                    "content": json.dumps(
-                        {
-                            "id": tc_id,
-                            "name": tc_name,
-                            "arguments": tc_args[:500],
-                        },
-                        ensure_ascii=False,
-                    ),
-                }
-
-            elif isinstance(item, ToolCallOutputItem):
-                # Tool result — raw_item is a dict with call_id, output, type
-                raw_ri = item.raw_item
-                if isinstance(raw_ri, dict):
-                    tc_id = raw_ri.get("call_id", "")
-                else:
-                    tc_id = getattr(raw_ri, "call_id", "") or ""
-                tc_name = _call_id_to_name.get(tc_id, "")
-                output_str = str(item.output) if item.output else ""
-
-                # Flush sub-agent buffered events before emitting tool result
-                if tc_name == "sub_agent":
-                    sat = _find_sub_agent_tool(tools)
-                    if sat and sat._sub_events:
-                        for sub_evt in sat._sub_events:
-                            yield sub_evt
-                        sat._sub_events.clear()
-
-                # Detect html_render
-                if tc_name == "html_render":
-                    yield {
-                        "code": 5,
-                        "content": json.dumps(
-                            {
-                                "id": tc_id,
-                                "name": tc_name,
-                                "result": "HTML page generated; rendering preview...",
-                            },
-                            ensure_ascii=False,
-                        ),
-                    }
-                    yield {"code": 8, "content": output_str}
-                else:
-                    yield {
-                        "code": 5,
-                        "content": json.dumps(
-                            {
-                                "id": tc_id,
-                                "name": tc_name,
-                                "result": output_str[:1000],
-                            },
-                            ensure_ascii=False,
-                        ),
-                    }
-
-                # Detect schedule_manager → code 7
-                if tc_name == "schedule_manager":
-                    try:
-                        sched_data = json.loads(output_str)
-                        if sched_data.get("action") in ("create", "delete"):
-                            yield {"code": 7, "content": json.dumps(sched_data, ensure_ascii=False)}
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-
-                # Detect todo_manager → code 9
-                if tc_name == "todo_manager":
-                    try:
-                        todo_data = json.loads(output_str)
-                        if "tasks" in todo_data:
-                            yield {"code": 9, "content": json.dumps(todo_data, ensure_ascii=False)}
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-
-                # Detect ask_user_question → code 10
-                if tc_name == "ask_user_question":
-                    try:
-                        ask_data = json.loads(output_str)
-                        if ask_data.get("type") == "ask_user":
-                            yield {"code": 10, "content": json.dumps(ask_data, ensure_ascii=False)}
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-
-
-def _history_to_sdk_input(history: list[dict]) -> list[dict]:
-    """Convert saved history to OpenAI Agents SDK input format.
-
-    SDK Responses API only accepts: user, assistant, system, developer.
-    Filter out 'tool' messages and simplify 'assistant' tool_call messages.
-    """
-    messages = []
-    for msg in history:
-        role = msg.get("role", "")
-        if role == "system":
-            continue  # SDK handles system prompt via instructions
-        if role == "tool":
-            continue  # Responses API doesn't support 'tool' role
-        content = msg.get("content")
-        if content is None:
-            content = ""
-        # Skip empty assistant messages (tool_call-only messages with no text)
-        if role == "assistant" and not str(content).strip() and msg.get("tool_calls"):
-            continue
-        messages.append({"role": role, "content": str(content)})
-    return messages
-
-
-def _sdk_result_to_history(prev_history: list[dict], result) -> list[dict]:
-    """Extract conversation history from SDK run result.
-
-    Appends the new messages from the SDK run to the previous history.
-    """
-    history = list(prev_history)
-    for item in result.new_items:
-        if isinstance(item, MessageOutputItem):
-            text = ""
-            raw = item.raw_item
-            # Extract text from the raw response output
-            if hasattr(raw, "content") and raw.content:
-                for part in raw.content:
-                    if hasattr(part, "text"):
-                        text += part.text
-            if text:
-                history.append({"role": "assistant", "content": text})
-        elif isinstance(item, ToolCallItem):
-            raw = item.raw_item
-            history.append(
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": getattr(raw, "call_id", ""),
-                            "type": "function",
-                            "function": {
-                                "name": getattr(raw, "name", ""),
-                                "arguments": getattr(raw, "arguments", ""),
-                            },
-                        }
-                    ],
-                }
-            )
-        elif isinstance(item, ToolCallOutputItem):
-            raw_ri = item.raw_item
-            tc_id = (
-                raw_ri.get("call_id", "")
-                if isinstance(raw_ri, dict)
-                else getattr(raw_ri, "call_id", "") or ""
-            )
-            history.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc_id,
-                    "content": str(item.output) if item.output else "",
-                }
-            )
-    return history
-
-
-_FRONTMATTER_RE = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
-
-
-def _prompt_body(raw: str) -> str:
-    """Strip YAML frontmatter from a prompt file and return just the body."""
-    return _FRONTMATTER_RE.sub("", raw, count=1).strip()
-
-
-def _sanitize_history(raw: list[dict]) -> list[dict]:
-    """Sanitize saved history for reloading.
-
-    - Filters out system messages (agent handles system prompt via instructions)
-    - Converts None values to empty strings
-    - Preserves complex types (tool_calls as list)
-    """
-    cleaned: list[dict] = []
-    for msg in raw:
-        if msg.get("role") == "system":
-            continue
-        clean = dict(msg)
-        for k, v in clean.items():
-            if v is None:
-                clean[k] = ""
-        if "name" in clean:
-            clean["name"] = canonical_tool_name(clean["name"])
-        if clean.get("tool_calls"):
-            clean["tool_calls"] = [
-                {
-                    **call,
-                    "function": {
-                        **call.get("function", {}),
-                        "name": canonical_tool_name(call.get("function", {}).get("name", "")),
-                    },
-                }
-                for call in clean["tool_calls"]
-            ]
-        cleaned.append(clean)
-    return cleaned
+            await persistence.save(self.history)
+        except Exception:
+            logger.exception("Session history save failed")
 
 
 # --- Standalone Session Update Agent ---

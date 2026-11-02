@@ -4,6 +4,7 @@ These tools allow the Agent to self-manage user profiles, skills,
 and memory during conversation.
 """
 
+import asyncio
 import json
 import re
 import shlex
@@ -15,6 +16,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator
 
 from core.agent_compat import BaseTool
+from core.delegation import TASK_ID_PATTERN, new_task_id, run_delegation, task_session_base
 from core.skills.manager import SkillManager
 from utils.context_assets import memory_index_notice, skill_location_context
 from utils.logger import logger
@@ -172,21 +174,24 @@ class UpdateUserProfileTool(BaseTool):
             )
 
 
-# --- Skill Manager Tool (read-only) ---
+# --- Skill Tool ---
 
 
 class SkillParams(BaseModel):
-    action: Literal["list", "get", "get_ref", "save", "delete", "ref_set", "ref_del"] = Field(
+    action: Literal["list", "get", "get_ref", "save", "patch", "delete", "ref_set", "ref_del"] = Field(
         description=(
             "Actions: list, get (main document), get_ref (reference body), "
-            "save (effective immediately), delete, "
+            "save (effective immediately), patch (exact text edit), delete, "
             "ref_set (write reference), ref_del (delete reference)"
         )
     )
     name: str = Field(default="", description="Skill name; optional for list and required for other actions")
     ref_filename: str = Field(
         default="",
-        description="Reference path relative to references/ path (required for get_ref/ref_set/ref_del, such as rules.md)",
+        description=(
+            "Reference path relative to references/ (required for get_ref/ref_set/ref_del, such as rules.md). "
+            "For patch, set it to edit a reference; omit it to edit main instructions."
+        ),
     )
     # --- save only fields ---
     description: str = Field(default="", description="Skill description(save required)")
@@ -209,6 +214,15 @@ class SkillParams(BaseModel):
     )
     # --- ref_set only fields ---
     ref_content: str = Field(default="", description="Reference file content(ref_set required)")
+    # --- patch only fields ---
+    old_string: str | None = Field(
+        default=None,
+        description="Required for patch: nonempty exact text from get/get_ref, matching exactly once in the body",
+    )
+    new_string: str | None = Field(
+        default=None,
+        description="Required for patch: replacement text; an explicit empty string deletes the matched fragment",
+    )
 
 
 class SkillTool(BaseTool):
@@ -219,6 +233,7 @@ class SkillTool(BaseTool):
         "- get: Load the main document and reference list\n"
         "- get_ref: Read a reference body\n"
         "- save: Save/Create skill(effective immediately)\n"
+        "- patch: Replace one exact fragment in main instructions or a named reference; preserve metadata\n"
         "- delete: Delete skill\n"
         "- ref_set: Write a reference file\n"
         "- ref_del: Delete a reference file"
@@ -231,6 +246,7 @@ class SkillTool(BaseTool):
         skill_manager: SkillManager,
         workspace: "Workspace" = None,
         session_id: str = "",
+        on_loaded=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -239,6 +255,10 @@ class SkillTool(BaseTool):
         self._skill_manager = skill_manager
         self._ws = workspace or Workspace(user_id)
         self._got_skills: set = set()
+        self._on_loaded = on_loaded
+
+    def on_context_compacted(self):
+        self._got_skills.clear()
 
     async def __call__(self, params: SkillParams) -> str:
         try:
@@ -250,6 +270,8 @@ class SkillTool(BaseTool):
                 return await self._action_get_ref(params.name, params.ref_filename)
             elif params.action == "save":
                 return self._action_save(params)
+            elif params.action == "patch":
+                return await self._action_patch(params)
             elif params.action == "delete":
                 return self._action_delete(params.name)
             elif params.action == "ref_set":
@@ -297,7 +319,6 @@ class SkillTool(BaseTool):
         raw = await ws_call(self._ws, "skill_get", name)
         if not raw:
             return f"Skill '{name}' does not exist."
-        self._got_skills.add(name)
         raw = normalize_tool_references(raw)
 
         result = f"Skill document `{name}/SKILL.md`:\n\n```markdown\n{raw}\n```"
@@ -307,6 +328,9 @@ class SkillTool(BaseTool):
             result += f"\n\nAvailable references ({len(refs)}):"
             for filename, content in refs.items():
                 result += f"\n- `{filename}` ({len(content)} characters) → skill(action='get_ref', name='{name}', ref_filename='{filename}')"
+        if self._on_loaded:
+            await self._on_loaded(name, raw)
+        self._got_skills.add(name)
         return result
 
     async def _action_get_ref(self, name: str, ref_filename: str) -> str:
@@ -317,7 +341,13 @@ class SkillTool(BaseTool):
         ref_filename = normalized if normalized in refs else ref_filename
         if ref_filename not in refs:
             return f"Reference file '{ref_filename}' is not present in skill '{name}'."
-        return f"`skills/{name}/references/{ref_filename}`:\n\n```\n{refs[ref_filename]}\n```"
+        guide = ""
+        if name not in self._got_skills:
+            guide = await self._action_get(name)
+            if name not in self._got_skills:
+                return guide
+            guide += "\n\n"
+        return guide + f"`skills/{name}/references/{ref_filename}`:\n\n```\n{refs[ref_filename]}\n```"
 
     def _action_save(self, params: SkillParams) -> str:
         if not params.name or not params.description or not params.instructions:
@@ -344,6 +374,24 @@ class SkillTool(BaseTool):
             return "Provide a skill name."
         ok = self._skill_manager.delete_user_skill(self._user_id, name)
         return f"Skill '{name}' deleted." if ok else f"Skill '{name}' does not exist."
+
+    async def _action_patch(self, params: SkillParams) -> str:
+        if not params.name or not params.old_string or params.new_string is None:
+            return "patch requires name, nonempty old_string and explicit new_string (empty is allowed)."
+        try:
+            await ws_call(
+                self._ws, "skill_patch", params.name, params.old_string, params.new_string, params.ref_filename
+            )
+        finally:
+            # A patch or stale match must not prevent re-reading current text.
+            self._got_skills.discard(params.name)
+        target = (
+            f"reference '{normalize_reference_path(params.ref_filename)}'"
+            if params.ref_filename
+            else "main instructions"
+        )
+        logger.info(f"Patched {target} for skill '{params.name}'")
+        return f"Patched {target} in skill '{params.name}'. Reload with get/get_ref before using it."
 
     async def _action_ref_set(self, name: str, ref_filename: str, ref_content: str) -> str:
         if not name or not ref_filename or not ref_content:
@@ -1163,28 +1211,40 @@ class SubAgentParams(BaseModel):
         default=None,
         description="Additional context for the sub-agent",
     )
+    task_id: str | None = Field(
+        default=None,
+        pattern=TASK_ID_PATTERN,
+        description=(
+            "Reuse the same task_id for follow-ups or revisions. Use different IDs for independent or "
+            "parallel tasks. Omission creates a new isolated task; the receipt contains its ID."
+        ),
+    )
 
 
 class SubAgentTool(BaseTool):
-    """Invoke a sub-agent to execute an independent task.
-
-    SubAgentRunner runs inside __call__, collecting text output for SDK return.
-    Sub-agent's tool events (code 4/5/9/10) are stored in _sub_events for
-    _stream_sdk_events to flush before emitting the tool result.
-    """
+    """Stream child delivery immediately and return a task receipt to the model."""
 
     name: str = "sub_agent"
-    description: str = "Delegate an independent task to a sub-agent."
+    description: str = (
+        "Delegate an independent task to a sub-agent. Its output streams directly to the user; "
+        "the returned JSON is a delivery receipt. Do not repeat delivered output. "
+        "Reuse its owner and task_id for revisions or answers to pending_questions."
+    )
     param_anno = SubAgentParams
 
-    def __init__(self, user_id: str = "", workspace=None, parent_history_fn=None, **kwargs):
+    def __init__(
+        self, user_id: str = "", session_id: str = "", workspace=None, parent_history_fn=None, **kwargs
+    ):
         super().__init__(**kwargs)
         self._user_id = user_id
         self._workspace = workspace
+        self._session_id = session_id or new_task_id()
         # Callable returning the live parent-agent history. When set, the
         # sub-agent will get a `parent_history` tool it can use on demand.
         self._parent_history_fn = parent_history_fn
-        self._sub_events: list[dict] = []
+        self.event_sink = None
+        self.deliveries = {}
+        self._inflight = {}
         # Dynamically build description from available agent types
         try:
             from core.sub_agent import list_agent_types
@@ -1192,49 +1252,100 @@ class SubAgentTool(BaseTool):
             agents = list_agent_types()
             if agents:
                 lines = "\n".join(f"- {a.name}: {a.description}" for a in agents)
-                self.description = f"Delegate an independent task to a sub-agent.Available types:\n{lines}"
+                self.description += f"\nAvailable types:\n{lines}"
         except Exception:
             pass
 
-    async def __call__(self, params: SubAgentParams) -> str:
-        """Run sub-agent, collect text output, buffer tool events."""
+    async def delegate(self, params: SubAgentParams, *, skill=None, emit=None) -> dict:
+        """Both explicit delegation and automatic skill handoff use this path."""
         from core.sub_agent import SubAgentRunner
 
-        self._sub_events.clear()
-
+        task_id = params.task_id or new_task_id()
+        kwargs = dict(
+            user_id=self._user_id,
+            session_id=task_session_base(self._session_id, task_id),
+            workspace=self._workspace,
+            parent_history_fn=self._parent_history_fn,
+        )
         try:
-            runner = SubAgentRunner(
-                agent_type=params.agent_type,
-                user_id=self._user_id,
-                session_id=f"from_main_{uuid4().hex[:8]}",
-                workspace=self._workspace,
-                parent_history_fn=self._parent_history_fn,
+            if skill:
+                runner = SubAgentRunner.from_skill(skill, **kwargs)
+            else:
+                try:
+                    runner = SubAgentRunner(agent_type=params.agent_type, **kwargs)
+                except ValueError:
+                    skills = await asyncio.to_thread(
+                        SkillManager(self._workspace).get_all_skills,
+                        self._user_id,
+                    )
+                    candidates = [
+                        candidate
+                        for candidate in skills.values()
+                        if candidate.requires_sub_agent
+                        and (candidate.sub_agent_name or candidate.name) == params.agent_type
+                    ]
+                    if len(candidates) != 1:
+                        raise
+                    runner = SubAgentRunner.from_skill(candidates[0], **kwargs)
+        except ValueError as exc:
+            return {
+                "type": "sub_agent_receipt",
+                "task_id": task_id,
+                "owner": params.agent_type,
+                "status": "failed",
+                "delivery_complete": False,
+                "failures": [str(exc)],
+            }
+        sink = emit or self.event_sink
+        events = []
+        delivery_id = uuid4().hex
+        self.deliveries[delivery_id] = events
+        self._inflight[delivery_id] = {
+            "type": "sub_agent_receipt",
+            "task_id": task_id,
+            "owner": runner.config.name,
+            "session_id": runner.session_id,
+            "status": "interrupted",
+            "delivery_complete": False,
+            "request": params.model_dump(),
+            "delivery_events": events,
+            "resume_agent": runner.config.name,
+            "resume_task_id": task_id,
+        }
+
+        async def record(event):
+            frame = dict(event)
+            if events and frame.get("code") == 2 and events[-1].get("code") == 2:
+                events[-1] = dict(events[-1], content=events[-1]["content"] + frame["content"])
+            else:
+                events.append(frame)
+            if sink:
+                await sink(frame)
+
+        receipt = await run_delegation(runner, params.task, params.context or "", task_id, record)
+        self._inflight.pop(delivery_id, None)
+        receipt["delivery_id"] = delivery_id
+        self.deliveries[delivery_id] = events
+        return receipt
+
+    def interruption_snapshot(self, arguments):
+        """Expose generated task IDs when cancellation prevents the final receipt."""
+        try:
+            request = json.loads(arguments)
+        except (ValueError, TypeError):
+            return []
+        return [
+            record
+            for record in self._inflight.values()
+            if all(
+                record["request"].get(key) == request.get(key)
+                for key in ("task", "agent_type", "context", "task_id")
             )
-        except ValueError as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+        ]
 
-        final_text = ""
+    async def __call__(self, params: SubAgentParams) -> str:
         try:
-            async for event in runner.run_stream(params.task, params.context or ""):
-                code = event.get("code")
-                content = event.get("content", "")
-
-                if code == 2:
-                    final_text += content
-                elif code in (4, 5, 9, 10):
-                    self._sub_events.append(event)
-
-        except Exception as e:
-            logger.error(f"SubAgentTool error: {e}")
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
-
-        if "[SKILL_PROPOSAL]" in final_text:
-            self._sub_events.append({"code": 12, "content": final_text})
-            report = re.sub(r"\[SKILL_PROPOSAL\][\s\S]*?\[/SKILL_PROPOSAL\]", "", final_text).strip()
-            if "[SKILL_PROPOSAL]" in report:
-                return "Sub-agent skill proposal output is incomplete. A retry notice was shown to the user; do not save incomplete proposals."
-            return (
-                report[:3000]
-                + "\n\nThe complete skill proposal was sent to the user confirmation card. Wait for user review and confirmation; do not repeat the proposal or reference bodies."
-            ).strip()
-        return final_text[:4000] if final_text else "Sub-agent execution completed"
+            return json.dumps(await self.delegate(params), ensure_ascii=False)
+        except Exception as exc:
+            logger.exception("Sub-agent delegation failed")
+            return json.dumps({"error": str(exc), "status": "failed"}, ensure_ascii=False)

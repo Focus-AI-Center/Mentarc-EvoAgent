@@ -462,6 +462,14 @@ async def test_main_agent_factory_installs_discovery_and_runs_search_then_call(t
     orchestrator.system_prompt = "Test instructions"
     orchestrator.model = "offline"
     orchestrator.matched_skill = None
+    from core.skills.tool_mounting import SkillToolMounter
+
+    orchestrator._skill_tools = SkillToolMounter(
+        orchestrator.tools,
+        user_id="alice",
+        session_id="test",
+        workspace=orchestrator.workspace,
+    )
     agent = await orchestrator._create_sdk_agent()
     assert await visible(agent) == {"toolsearch"}
     discover.assert_not_awaited()
@@ -478,7 +486,6 @@ async def test_main_agent_factory_installs_discovery_and_runs_search_then_call(t
 async def test_sub_agent_stream_uses_discovery(tmp_path, monkeypatch):
     import core.sub_agent as sub_module
 
-    sub_module._ensure_imports()
     monkeypatch.setattr(sub_module, "_ensure_sdk_client", lambda: None)
     monkeypatch.setattr(sub_module, "OPENAI_API_KEY", "offline-test")
     monkeypatch.setattr(sub_module, "DEFAULT_SUB_AGENT_TOOLS", [])

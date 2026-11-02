@@ -75,6 +75,7 @@ class ToolSearchCatalog:
         self.agent = agent
         self._initial_keys = {_name_key(name) for name in initially_loaded}
         self._active: set[str] = set()
+        self._skill_active: set[str] = set()
         self._originals: dict[str, FunctionTool] = {}
         self._loader = loader
         self._discovered = loader is None
@@ -114,9 +115,23 @@ class ToolSearchCatalog:
 
     def _gate(self, tool: FunctionTool):
         async def enabled(ctx, _agent):
-            return tool.name in self._active and await self._allowed(tool, ctx)
+            return tool.name in (self._active | self._skill_active) and await self._allowed(tool, ctx)
 
         return enabled
+
+    async def mount_skill_tools(self, names: Iterable[str], tools: Iterable = ()) -> None:
+        self._add(tools)
+        keys = {_name_key(name) for name in names}
+        if any(name.startswith("mcp__") for name in names):
+            await self.discover()
+        self._skill_active.update(name for name in self._originals if _name_key(name) in keys)
+
+    def unmount_skill_tools(self, owned_names: set[str]) -> None:
+        self._skill_active.clear()
+        for name in owned_names:
+            self._originals.pop(name, None)
+            self._active.discard(name)
+        self.tools[:] = [tool for tool in self.tools if tool.name not in owned_names]
 
     async def _allowed(self, tool: FunctionTool, ctx: RunContextWrapper) -> bool:
         predicate = tool.is_enabled

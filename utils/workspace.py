@@ -33,6 +33,8 @@ from configs.settings import (
     DEFAULT_SKILLS_DIR,
 )
 from utils.memory_index import parse_memory_index
+from utils.skill_patching import patch_skill_text
+from utils.skill_references import normalize_reference_path
 from utils.storage_backend import (
     IF_MATCH_ABSENT,
     ETagMismatchError,
@@ -292,6 +294,30 @@ class Workspace:
             return self._backend.read_text_sync(key)
         except KeyNotFoundError:
             return None
+
+    def skill_patch(self, name: str, old_string: str, new_string: str, ref_filename: str = "") -> None:
+        """Patch instructions or one text reference with a conditional write.
+
+        Match exactly once in the current stored body. Preserve frontmatter and
+        unrelated files, and reject a competing write rather than overwriting it.
+        """
+        key = self._key("skills", name, "SKILL.md")
+        target = f"Skill '{name}'"
+        if ref_filename:
+            filename = normalize_reference_path(ref_filename)
+            if not self._exists(key):
+                raise ValueError(f"{target} does not exist.")
+            key = self._key("skills", name, "references", filename)
+            target = f"Reference '{filename}' in skill '{name}'"
+        try:
+            content, etag = self._backend.read_text_with_etag_sync(key)
+        except KeyNotFoundError as err:
+            raise ValueError(f"{target} does not exist.") from err
+        updated = patch_skill_text(content, old_string, new_string, main_document=not ref_filename)
+        try:
+            self._backend.write_text_sync(key, updated, if_match=etag)
+        except ETagMismatchError as err:
+            raise ValueError(f"{target} changed while patching. Reload it before retrying.") from err
 
     def skill_get_all(self) -> dict[str, str]:
         result: dict[str, str] = {}

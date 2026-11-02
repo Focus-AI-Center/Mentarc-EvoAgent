@@ -1,6 +1,8 @@
 """Request/response models for Agent API."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from core.delegation import TASK_ID_PATTERN
 
 
 class UserInput(BaseModel):
@@ -19,6 +21,7 @@ class AgentRequest(BaseModel):
     userId: str | int
     sessionId: str | int
     requestId: str | None = None
+    taskId: str | None = Field(default=None, pattern=TASK_ID_PATTERN)
     data: UserInput
     plugins: list[str] | None = None
     prompt: str | None = None

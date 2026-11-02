@@ -38,7 +38,7 @@ Register an existing UTF-8 workspace file with `append(type, title, file_path, s
 
 ## Skill proposals
 
-Call `skill(action="list")` first. Propose only workflows with multiple tool calls, probable reuse, generalizable inputs and outputs, and new value. Do not directly call `save` or `ref_set` during extraction.
+Call `skill(action="list")` first. Propose only workflows with multiple tool calls, probable reuse, generalizable inputs and outputs, and new value. Do not mutate skills during extraction (`save`, `patch`, `delete`, `ref_set` or `ref_del`).
 
 ```text
 [SKILL_PROPOSAL]

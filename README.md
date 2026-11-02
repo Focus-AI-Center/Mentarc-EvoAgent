@@ -64,12 +64,13 @@ Following Figure 1 of the paper, EvoAgent is organised as five structural layers
 | API entry | `app/api/` |
 | Orchestration | `core/agent.py::EvoAgent` |
 | Runtime | OpenAI Agents SDK (`Runner.run_streamed`) via `core/agent_compat.py` |
+| Shared execution | `core/runtime/`: SDK sessions, history, events and interruption persistence |
 | Tools + Session | `core/plugins/`, `utils/workspace.py` |
 | Persistence | `utils/workspace.py`, `utils/history_compressor.py` |
 
 The system runs two coordinated loops (Section 3 of the paper):
 
-**Online execution loop** — every user turn loads profile/memory/skills from the per-user workspace, passes the query through a 3-stage skill matcher, injects matched `SKILL.md` into the ReAct context, then calls tools via the OpenAI Agents SDK. Long histories are compressed on the fly; complex turns may hand off to sub-agents.
+**Online execution loop** — every user turn loads profile/memory/skills from the per-user workspace, passes the query through a 3-stage skill matcher, injects matched `SKILL.md` into the ReAct context, then calls tools via the OpenAI Agents SDK. Long histories are checked for compression before execution and between SDK tool steps; complex turns may hand off to sub-agents.
 
 ![Online Execution Loop](docs/figures/online-loop.svg)
 
@@ -78,6 +79,31 @@ The system runs two coordinated loops (Section 3 of the paper):
 ![Offline Evolution Loop](docs/figures/offline-loop.svg)
 
 The complete mapping between paper sections (methodology, appendix pseudocode) and source files will ship with the official release alongside the paper PDF.
+
+### Task threads and live delegation
+
+Explicit delegation and skill-triggered handoff share task execution and delivery
+receipts. Reuse `sub_agent(..., task_id="report-a")` for revisions; different task
+IDs keep child histories separate. Child output streams directly to the user,
+while the parent receives delivery state, references and follow-up information.
+The chat UI separates concurrent task streams and restores delivered content
+from display metadata without adding the full transcript to the parent's model
+context.
+
+Loaded skills grant their required tools to the loading agent. Context
+compression unloads skill guides and their tool grants together, allowing exact
+instructions to be reloaded before execution. See the
+[agent coordination guide](docs/agent-coordination.md) for task identity,
+automatic handoff, receipt fields, compression behavior and offline tests.
+
+The [context compression guide](docs/context-compression.md) describes complete
+transcript summarization within token budgets, bounded recent-message retention,
+exact recovery references, shared deadlines and failure-safe history replacement.
+
+Main and child agents compose the same [runtime components](docs/runtime-components.md).
+HTTP disconnection or cancellation closes the active stream and saves completed
+tool facts, partial responses and unconfirmed calls through the existing
+workspace. This requires no Redis and does not automatically retry remote work.
 
 ### Cloud workspace and direct reference access
 
@@ -97,7 +123,7 @@ execute_code(language="bash", code="python scripts/run.py",
 
 A bash read would add container lookup or startup, Docker exec, a shell and the
 s3fs filesystem path to a simple storage operation. Direct MinIO reads and writes
-avoid those execution costs, so `get_ref`, `save` and `ref_set` are the intended
+avoid those execution costs, so `get_ref`, `save`, `patch` and `ref_set` are the intended
 fast path for skill documents. Warm sessions reuse their container, but an
 extra exec is still unnecessary for ordinary reference access. This is an
 architectural latency benefit, not a published benchmark.
@@ -105,6 +131,9 @@ architectural latency benefit, not a published benchmark.
 Read the [Cloud Agent guide](docs/cloud-agent.md) for object-key/path mapping,
 container lifecycle, shared stdio MCP processes, configuration and API-worker
 ownership. See [skill extraction](docs/skill-extraction.md) for reference bundles.
+The same `skill` tool supports [exact patches](docs/skill-extraction.md#exact-patches)
+to instructions or individual text references, with conditional writes that reject
+concurrent changes.
 
 ### Memory index and skill directories
 

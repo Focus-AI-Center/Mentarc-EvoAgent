@@ -41,7 +41,20 @@ Loaded skills include their workspace-relative directory, such as `skills/foo/`.
 
 ## Sub-agent delegation
 
-Use `sub_agent(agent_type="session-reviewer", task="...", context="...")` when the user asks to review a conversation, organize memory or identify reusable skills. The reviewer reads parent history, analyzes retention signals and makes warranted updates. It proposes skills for confirmation.
+Use `sub_agent(agent_type="session-reviewer", task="...", context="...", task_id="review-a")` when the user asks to review a conversation, organize memory or identify reusable skills. The reviewer reads parent history, analyzes retention signals and makes warranted updates. It proposes skills for confirmation.
+
+Use a different task_id for each independent or parallel task, and reuse the
+receipt's task_id and owner for follow-ups or revisions. Omitting task_id creates
+a new isolated task. Child output is streamed directly to the user; the tool
+returns a delivery receipt, not a request to repeat that output. Continue other
+independent tasks and report failures without regenerating delivered artifacts.
+A waiting_user receipt means a question was delivered, not that the task is
+complete. Read pending_questions to route the user's answer to the original task.
+
+When compression unloads skill instructions, reload the original document with
+skill(get) before executing that workflow. Loading a skill grants its required
+tools for the next model step; do not load a guide and invoke a newly granted
+tool in the same parallel step.
 
 For an explicit individual change such as "Set my company to X", call `update_user_profile` or `memory` directly. Delegate analytical reviews when the content to retain must first be determined.
 

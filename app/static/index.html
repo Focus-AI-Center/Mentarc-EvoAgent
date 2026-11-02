@@ -2573,6 +2573,61 @@ function createBotMsg() {
   return div;
 }
 
+function accumulateTaskText(texts, event) {
+  const key = event.task_id ? JSON.stringify([event.source_agent || '', event.task_id]) : 'main';
+  texts.set(key, (texts.get(key) || '') + event.content);
+  return [...texts.values()].join('\n\n');
+}
+
+function createTaskStream(rootBubble) {
+  const buckets = new Map();
+  return {
+    hasTasks: () => buckets.size > 0,
+    bubbleFor(event) {
+      if (!event.task_id) return rootBubble;
+      const key = JSON.stringify([event.source_agent || '', event.task_id]);
+      if (!buckets.has(key)) {
+        if (rootBubble.textContent === 'Thinking...') rootBubble.textContent = '';
+        const message = createBotMsg();
+        message.dataset.taskId = event.task_id;
+        const bubble = message.querySelector('.bubble');
+        bubble.textContent = '';
+        buckets.set(key, bubble);
+      }
+      return buckets.get(key);
+    },
+  };
+}
+
+function replayDelegatedDelivery(events, rootBubble, sessionId) {
+  const stream = createTaskStream(rootBubble);
+  const texts = new Map();
+  for (const event of events) {
+    const bubble = stream.bubbleFor(event);
+    if (event.code === 2) {
+      const text = (texts.get(bubble) || '') + event.content;
+      texts.set(bubble, text);
+      bubble.innerHTML = renderMarkdown(text);
+    } else if (event.code === 12) {
+      appendSkillProposals(bubble, event.content, sessionId);
+    } else if ([4, 5, 8, 9, 10].includes(event.code)) {
+      let data;
+      try { data = JSON.parse(event.content); } catch { continue; }
+      if (event.code === 4 && !['todo_manager', 'ask_user_question'].includes(data.name)) {
+        addToolCall(bubble, data.id || '', data.name, data.arguments || '');
+      } else if (event.code === 5 && !['todo_manager', 'ask_user_question'].includes(data.name)) {
+        addToolResult(bubble, data.id || '', data.name, data.result || '');
+      } else if (event.code === 8 && data.__html_render__ && data.preview_id) {
+        insertPreviewCard(bubble, data.preview_id, data.title || 'Preview', data.size_kb || 0);
+      } else if (event.code === 9 && data.tasks) {
+        renderTodoPanel(bubble.parentElement, data.tasks);
+      } else if (event.code === 10 && data.type === 'ask_user' && data.options) {
+        renderAskPanel(bubble.parentElement, data.question || '', data.options);
+      }
+    }
+  }
+}
+
 // Initialize marked.js with GFM (tables, strikethrough, etc.)
 if (typeof marked !== 'undefined') {
   marked.use({ gfm: true, breaks: false });
@@ -3181,6 +3236,9 @@ function getToolTags(bubble) {
 }
 
 function addToolCall(bubble, id, name, args) {
+  if (!['skill', 'todo_manager', 'ask_user_question'].includes(name)) {
+    flowStateFor(bubble.parentElement).pending.push({ icon: toolIcon(name), label: toolLabel(name) });
+  }
   const container = getToolTags(bubble);
   const card = document.createElement('div');
   card.className = 'tool-card pending';
@@ -3311,11 +3369,15 @@ function clearAttachment() {
   document.getElementById('fileTag').classList.remove('visible');
 }
 
-// Flow timeline state — tracks which tools are associated with which todo step
-let _pendingFlowTools = [];  // collect code 4 tool calls between todo updates
-let _stepTools = {};         // stepId → [{icon, label}]
+// Progress belongs to its task's message, including independent tool badges.
+const _taskFlowStates = new WeakMap();
+function flowStateFor(msgDiv) {
+  if (!_taskFlowStates.has(msgDiv)) _taskFlowStates.set(msgDiv, {pending: [], steps: {}});
+  return _taskFlowStates.get(msgDiv);
+}
 
 function renderTodoPanel(msgDiv, tasks) {
+  const flow = flowStateFor(msgDiv);
   let panel = msgDiv.querySelector('.todo-panel');
   if (!panel) {
     panel = document.createElement('div');
@@ -3328,16 +3390,16 @@ function renderTodoPanel(msgDiv, tasks) {
       msgDiv.prepend(panel);
     }
     // Initialize the panel:clear setup tools collected during(without assigning them to steps)
-    _pendingFlowTools = [];
+    flow.pending = [];
   }
 
   // Associate pending tools with the active step
   var activeStep = tasks.find(function(t) { return t.status === 'in_progress'; }) ||
                    tasks.filter(function(t) { return t.status === 'completed'; }).pop();
-  if (activeStep && _pendingFlowTools.length) {
-    if (!_stepTools[activeStep.id]) _stepTools[activeStep.id] = [];
-    _stepTools[activeStep.id].push.apply(_stepTools[activeStep.id], _pendingFlowTools);
-    _pendingFlowTools = [];
+  if (activeStep && flow.pending.length) {
+    if (!flow.steps[activeStep.id]) flow.steps[activeStep.id] = [];
+    flow.steps[activeStep.id].push(...flow.pending);
+    flow.pending = [];
   }
 
   var statusIcon = { completed: '\u2713', in_progress: '\u25E6', pending: '\u25CB' };
@@ -3346,7 +3408,7 @@ function renderTodoPanel(msgDiv, tasks) {
 
   panel.innerHTML = '<div class="todo-panel-title">\u4EFB\u52A1\u8FDB\u5EA6 ' + done + '/' + total + '</div>' +
     tasks.map(function(t) {
-      var tools = _stepTools[t.id] || [];
+      var tools = flow.steps[t.id] || [];
       var badges = tools.map(function(tool) {
         return '<span class="todo-tool-badge">' + tool.icon + '<span>' + tool.label + '</span></span>';
       }).join(' ');
@@ -3390,8 +3452,6 @@ async function send() {
 
   sending = true;
   sendBtn.disabled = true;
-  _pendingFlowTools = [];
-  _stepTools = {};
   inputEl.value = '';
   inputEl.style.height = 'auto';
 
@@ -3420,6 +3480,9 @@ async function send() {
   const bubble = botDiv.querySelector('.bubble');
 
   let rawText = '';
+  const taskStream = createTaskStream(bubble);
+  const taskTexts = new Map();
+  const bubbleTexts = new Map();
 
   try {
     const res = await fetch('/api/agent/chat', {
@@ -3451,18 +3514,22 @@ async function send() {
         let event;
         try { event = JSON.parse(jsonStr); } catch { continue; }
 
+        const eventBubble = [2, 4, 5, 8, 9, 10, 12].includes(event.code)
+          ? taskStream.bubbleFor(event) : bubble;
         if (event.code === 2) {
-          rawText += event.content;
-          bubble.innerHTML = renderMarkdown(skillProposalVisibleText(rawText) || 'Preparing skill proposal…');
+          rawText = accumulateTaskText(taskTexts, event);
+          const text = (bubbleTexts.get(eventBubble) || '') + event.content;
+          bubbleTexts.set(eventBubble, text);
+          eventBubble.innerHTML = renderMarkdown(skillProposalVisibleText(text) || 'Preparing skill proposal…');
           scrollToBottom();
 
         } else if (event.code === 12) {
-          appendSkillProposals(bubble, event.content, requestSessionId);
+          appendSkillProposals(eventBubble, event.content, requestSessionId);
         } else if (event.code === 3) {
           if (event.content === 'stream_start') {
             bubble.textContent = 'Thinking...';
           } else if (event.content === 'stream_end') {
-            if (!rawText) {
+            if (!rawText && !taskStream.hasTasks()) {
               if (bubble.parentElement && bubble.parentElement.querySelector('.tool-tags')) {
                 bubble.textContent = '';
               } else {
@@ -3485,17 +3552,13 @@ async function send() {
           let info;
           try { info = JSON.parse(event.content); } catch { info = { name: '?', arguments: event.content }; }
           if (info.name === 'todo_manager' || info.name === 'ask_user_question') continue;
-          // skill is an infrastructure call,do not add it to progress badges
-          if (info.name !== 'skill') {
-            _pendingFlowTools.push({ icon: toolIcon(info.name), label: toolLabel(info.name) });
-          }
-          addToolCall(bubble, info.id || '', info.name, info.arguments || '');
+          addToolCall(eventBubble, info.id || '', info.name, info.arguments || '');
 
         } else if (event.code === 5) {
           let info;
           try { info = JSON.parse(event.content); } catch { info = { name: '?', result: event.content }; }
           if (info.name === 'todo_manager' || info.name === 'ask_user_question') continue;
-          addToolResult(bubble, info.id || '', info.name, info.result || '');
+          addToolResult(eventBubble, info.id || '', info.name, info.result || '');
           // Detect skill save success -> toast + refresh
           if (info.name === 'skill' && typeof info.result === 'string' && info.result.includes('saved')) {
             const nameMatch = info.result.match(/Skill\s+['"]([^'"]+)['"]\s+saved/i);
@@ -3536,7 +3599,7 @@ async function send() {
             const r = JSON.parse(event.content);
             if (r.__html_render__ && r.preview_id) {
               const title = r.title || 'Preview';
-              insertPreviewCard(bubble, r.preview_id, title, r.size_kb || 0);
+              insertPreviewCard(eventBubble, r.preview_id, title, r.size_kb || 0);
               fetchAndOpenPreview(r.preview_id, title);
             }
           } catch(e) { console.error('code 8 parse error:', e); }
@@ -3546,7 +3609,7 @@ async function send() {
           try {
             const todoData = JSON.parse(event.content);
             if (todoData.tasks) {
-              renderTodoPanel(bubble.parentElement, todoData.tasks);
+              renderTodoPanel(eventBubble.parentElement, todoData.tasks);
             }
           } catch(e) { console.error('code 9 parse error:', e); }
 
@@ -3555,7 +3618,7 @@ async function send() {
           try {
             const askData = JSON.parse(event.content);
             if (askData.type === 'ask_user' && askData.options) {
-              renderAskPanel(bubble.parentElement, askData.question || '', askData.options);
+              renderAskPanel(eventBubble.parentElement, askData.question || '', askData.options);
             }
           } catch(e) { console.error('code 10 parse error:', e); }
         }
@@ -3597,6 +3660,7 @@ async function generateOpportunity() {
   const userId = document.getElementById('userId').value || 'test';
   const oppSessionId = 'opp-' + now.toISOString().slice(0, 10);
   let rawText = '';
+  const taskTexts = new Map();
 
   try {
     const res = await fetch('/api/agent/chat', {
@@ -3628,7 +3692,7 @@ async function generateOpportunity() {
         try { event = JSON.parse(line.slice(6)); } catch { continue; }
 
         if (event.code === 2) {
-          rawText += event.content;
+          rawText = accumulateTaskText(taskTexts, event);
           oppLoadingEl.classList.add('hidden');
           oppArticleEl.innerHTML = renderMarkdown(rawText);
         } else if (event.code === 3) {
@@ -4575,6 +4639,7 @@ async function restoreSession(sid) {
         }
       } else if (msg.role === 'tool') {
         if (lastBotBubble) {
+          if (msg.delivery_events) replayDelegatedDelivery(msg.delivery_events, lastBotBubble, sid);
           const name = msg.name || '?';
           const content = msg.content || '';
           // todo_manager → restore progress panel(keep only the latest snapshot)

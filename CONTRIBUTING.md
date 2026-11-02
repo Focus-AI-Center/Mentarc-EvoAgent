@@ -43,6 +43,7 @@ python cli.py --user demo          # or: evoagent-cli --user demo
 |---|---|
 | `core/agent.py` | Main orchestrator (`EvoAgent`). ReAct loop, skill matching, Phase 2.5 trigger-based handoff. |
 | `core/sub_agent.py` | `SubAgentRunner` — loads `configs/agents/*.md` into SDK `Agent`. |
+| `core/runtime/` | Shared SDK execution, history conversion, event streams and session persistence. |
 | `core/tool_search.py` | Request-scoped keyword search and deferred tool schemas for main agents and sub-agents. |
 | `core/skills/` | 3-stage skill matcher + skill manager. |
 | `core/plugins/` | External tools (web_search, fetch_url, execute_code, ...) + internal tools (update_user_profile, memory, skill, sub_agent, parent_history). |
@@ -50,8 +51,24 @@ python cli.py --user demo          # or: evoagent-cli --user demo
 | `configs/skills/` | Built-in skills, each in `{name}/SKILL.md` + optional `references/`. |
 | `configs/agents/` | Sub-agent configs, each a single `.md` with YAML frontmatter. |
 | `utils/workspace.py` | Per-user local-filesystem workspace. |
-| `utils/history_compressor.py` | Nine-section history compaction. |
+| `utils/history_compressor.py` | Budgeted context compaction with validated summaries and recovery references. |
 | `utils/context_assets.py` | Shared memory-index loading limits and skill directory guidance for main agents, sub-agents, and internal tools. |
+
+## Runtime component boundaries
+
+Keep task routing and configuration in the main and child orchestrators. Put
+shared execution, persistence or lifecycle behavior in components with explicit
+inputs and independently testable outcomes. Existing components for delegation,
+context compression and skill tool mounting can be composed directly.
+
+Create an abstraction when it clarifies ownership, serves multiple callers or
+allows a meaningful behavior to be tested in isolation. A one-off flow can stay
+local when splitting it would only add indirection. Add general registries or
+lifecycle frameworks only when concrete consumers require them. Shared runtime
+modules should not import `core.agent` or `core.sub_agent` to obtain helpers.
+
+See [runtime components](docs/runtime-components.md) for the current composition
+and interruption-save contract.
 
 ## Adding a new external plugin
 
