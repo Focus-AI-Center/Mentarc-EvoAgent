@@ -6,6 +6,8 @@ from collections.abc import AsyncGenerator
 
 from agents.items import ToolCallItem, ToolCallOutputItem
 
+from utils.tool_results import tool_observation
+
 
 def _find_sub_agent_tool(tools: list):
     """Find the shared delegation entry point."""
@@ -121,15 +123,17 @@ async def _map_sdk_events(result, *, observer=None) -> AsyncGenerator[dict, None
                     tc_id = getattr(raw_ri, "call_id", "") or ""
                 tc_name = _call_id_to_name.get(tc_id, "")
                 output_str = str(item.output) if item.output else ""
+                observation = tool_observation(output_str)
 
                 # Detect html_render
-                if tc_name == "html_render":
+                if tc_name == "html_render" and not observation["is_error"]:
                     yield {
                         "code": 5,
                         "content": json.dumps(
                             {
                                 "id": tc_id,
                                 "name": tc_name,
+                                **observation,
                                 "result": "HTML page generated; rendering preview...",
                             },
                             ensure_ascii=False,
@@ -144,6 +148,7 @@ async def _map_sdk_events(result, *, observer=None) -> AsyncGenerator[dict, None
                                 "id": tc_id,
                                 "name": tc_name,
                                 "result": output_str[:1000],
+                                **observation,
                             },
                             ensure_ascii=False,
                         ),

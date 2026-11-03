@@ -40,6 +40,10 @@ Register an existing UTF-8 workspace file with `append(type, title, file_path, s
 
 Call `skill(action="list")` first. Propose only workflows with multiple tool calls, probable reuse, generalizable inputs and outputs, and new value. Do not mutate skills during extraction (`save`, `patch`, `delete`, `ref_set` or `ref_del`).
 
+For an improvement, read the existing skill first, then propose `operation="update"`
+and `update_target` equal to its name. Keep `name` identical and include the complete
+updated instructions plus changed references. New skills use `operation="create"`.
+
 ```text
 [SKILL_PROPOSAL]
 {

@@ -8,6 +8,7 @@ from contextlib import aclosing
 from uuid import uuid4
 
 from utils.logger import logger
+from utils.tool_results import tool_observation
 
 RECEIPT_TYPE = "sub_agent_receipt"
 TASK_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
@@ -138,8 +139,9 @@ class ProposalFilter:
 
 async def run_delegation(runner, task, context, task_id, emit=None):
     """Keep all mutable delivery state local to one invocation."""
-    codes, references = set(), []
-    link_frames, questions = [], []
+    codes, produced = set(), {}
+    delivered_frames, preview_frames, questions = [], [], []
+    tool_outcomes = []
     text_parts, failures = [], []
     proposal_filter = ProposalFilter()
     asked = False
@@ -152,8 +154,29 @@ async def run_delegation(runner, task, context, task_id, emit=None):
         frame.setdefault("source_agent", runner.config.name)
         frame.setdefault("delivery_owner", runner.config.name)
         codes.add(frame.get("code"))
-        if frame.get("code") == 8:
-            link_frames.append(str(frame.get("content", "")))
+        if frame.get("code") == 2:
+            delivered_frames.append(str(frame.get("content", "")))
+        elif frame.get("code") == 8:
+            preview_frames.append(str(frame.get("content", "")))
+        if frame.get("code") == 5:
+            try:
+                data = json.loads(frame.get("content") or "{}")
+            except (ValueError, TypeError):
+                data = {}
+            if isinstance(data, dict):
+                observation = data if "status" in data else tool_observation(data.get("result"))
+                tool_name = data.get("name") or "unknown"
+                outcome = {
+                    "tool": tool_name,
+                    "call_id": data.get("id", ""),
+                    "status": observation.get("status", "unknown"),
+                }
+                if observation.get("is_error"):
+                    outcome["error"] = str(observation.get("error") or "Tool reported failure")[:1000]
+                tool_outcomes.append(outcome)
+                for artifact in observation.get("artifacts", []):
+                    if isinstance(artifact, dict) and artifact.get("url"):
+                        produced[artifact["url"]] = dict(artifact, tool=tool_name, call_id=data.get("id", ""))
         if emit:
             await emit(frame)
 
@@ -193,9 +216,12 @@ async def run_delegation(runner, task, context, task_id, emit=None):
             )
 
     summary = re.sub(r"\[SKILL_PROPOSAL\][\s\S]*?(?:\[/SKILL_PROPOSAL\]|$)", "", full_text).strip()
-    for url in re.findall(r"https?://[^\s<>`\"\)]+", summary + "\n" + "\n".join(link_frames)):
-        if url not in references:
-            references.append(url)
+    delivered_text = "".join(delivered_frames) + "\n" + "\n".join(preview_frames)
+    artifacts = [
+        dict(artifact, delivery_status="delivered" if url in delivered_text else "produced")
+        for url, artifact in produced.items()
+    ]
+    references = [artifact["url"] for artifact in artifacts if artifact["delivery_status"] == "delivered"]
     visible_delivery = bool(codes & {2, 8, 10, 12})
     status = "failed" if failures or not visible_delivery else "waiting_user" if asked else "delivered"
     if not visible_delivery and not failures:
@@ -209,6 +235,8 @@ async def run_delegation(runner, task, context, task_id, emit=None):
         "delivery_complete": visible_delivery and not failures,
         "delivered_codes": sorted(codes),
         "artifact_refs": references[:20],
+        "artifacts": artifacts[:100],
+        "tool_outcomes": tool_outcomes[-100:],
         "summary": summary[:1000] + ("\n...\n" + summary[-500:] if len(summary) > 1500 else summary[1000:]),
         "agent_instruction": (
             "The child output was streamed directly to the user. Do not repeat it or regenerate delivered artifacts. "

@@ -4,6 +4,7 @@ import json
 import re
 
 from utils.token_counter import count_tokens
+from utils.tool_results import tool_observation
 
 ASSET_MARK = "[Session asset index]"
 CONTINUATION_NOTE = (
@@ -49,9 +50,27 @@ def collect_assets(messages):
         if message.get("role") == "user" and not content.lstrip().startswith("<summary>"):
             for url in _URL_RE.findall(content):
                 add("source", url)
-            if "[User-uploaded images]" in content:
-                for url in _URL_RE.findall(content.split("[User-uploaded images]", 1)[1]):
-                    add("upload", url, field="image")
+            attachments = message.get("attachments") or {}
+            images = attachments.get("images")
+            if images is None and "[User-uploaded images]" in content:
+                block = content.split("[User-uploaded images]", 1)[1].split("[User-uploaded files]", 1)[0]
+                images = [
+                    line.strip()
+                    for line in block.splitlines()
+                    if not any(char.isspace() for char in line.strip())
+                ]
+            for url in images or []:
+                add("upload", url, field="image")
+            files = attachments.get("files")
+            if files is None and "[User-uploaded files]" in content:
+                try:
+                    files = json.loads(content.split("[User-uploaded files]", 1)[1])
+                except (ValueError, TypeError):
+                    files = []
+            for item in files if isinstance(files, list) else []:
+                if isinstance(item, dict):
+                    for field in ("url", "file_url", "download_url"):
+                        add("upload", item.get(field), field="file")
         for call in message.get("tool_calls", []):
             function = call.get("function", {})
             if function.get("name") not in ("fetch_url", "fetchurl"):
@@ -70,6 +89,8 @@ def collect_assets(messages):
             continue
         if not isinstance(data, dict):
             continue
+        if tool_observation(data)["status"] in ("error", "unknown"):
+            continue
         tool = message.get("name") or "unknown"
         for field in _RESULT_FIELDS:
             add("result", data.get(field), tool, field)
@@ -86,9 +107,12 @@ def collect_assets(messages):
     return list(refs.values())
 
 
-def render_index(messages, receipts, reloads, budget):
+def render_index(messages, receipts, reloads, budget, *, questions=None):
     """Keep recent explicit outputs first, fit complete entries and never cut URLs."""
     parts = [ASSET_MARK]
+    if questions:
+        parts.append("- Pending user questions (resume the saved question and task identity):")
+        parts.extend("  " + json.dumps(row, ensure_ascii=False) for row in questions)
     if reloads:
         parts.append("- Skill guides were unloaded; reload originals before executing their workflows:")
         for row in reloads:
@@ -107,7 +131,10 @@ def render_index(messages, receipts, reloads, budget):
                     "delivery_id",
                     "session_id",
                     "delivered_codes",
+                    "artifacts",
+                    "tool_outcomes",
                 )
+                and (questions is None or key != "pending_questions")
             }
             parts.append("  " + json.dumps(compact, ensure_ascii=False))
     text = "\n".join(parts)

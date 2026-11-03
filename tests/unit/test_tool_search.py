@@ -487,7 +487,6 @@ async def test_sub_agent_stream_uses_discovery(tmp_path, monkeypatch):
     import core.sub_agent as sub_module
 
     monkeypatch.setattr(sub_module, "_ensure_sdk_client", lambda: None)
-    monkeypatch.setattr(sub_module, "OPENAI_API_KEY", "offline-test")
     monkeypatch.setattr(sub_module, "DEFAULT_SUB_AGENT_TOOLS", [])
     model = SearchThenCallModel("mcp__server__docs__lookup")
     calls = []
@@ -518,7 +517,6 @@ async def test_sub_agent_stream_uses_discovery(tmp_path, monkeypatch):
         session_id="test",
         workspace=Workspace("alice", backend=LocalFSBackend(root=tmp_path)),
     )
-    monkeypatch.setattr(runner, "_check_completion", AsyncMock(return_value=True))
     events = [event async for event in runner.run_stream("lookup documentation")]
     tool_calls = [json.loads(event["content"])["name"] for event in events if event["code"] == 4]
     assert tool_calls == ["toolsearch", model.target]

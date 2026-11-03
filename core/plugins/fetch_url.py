@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from core.agent_compat import BaseTool
 from core.plugins.base import PluginMeta, register_plugin
 from utils.logger import logger
+from utils.tool_results import failure_result
 
 
 class FetchUrlParams(BaseModel):
@@ -37,7 +38,7 @@ class FetchUrlTool(BaseTool):
     async def __call__(self, params: FetchUrlParams) -> str:
         url = params.url.strip()
         if not url:
-            return "Error: URL is empty."
+            return failure_result("Error: URL is empty.")
 
         # Normalize URL
         if not url.startswith(("http://", "https://")):
@@ -46,7 +47,7 @@ class FetchUrlTool(BaseTool):
         try:
             text, title = await self._fetch_and_parse(url)
             if not text:
-                return f"Failed to extract content from {url}"
+                return failure_result(f"Failed to extract content from {url}")
 
             # Truncate to reasonable size
             if len(text) > 8000:
@@ -56,10 +57,10 @@ class FetchUrlTool(BaseTool):
             return header + text
 
         except httpx.TimeoutException:
-            return f"Timeout fetching {url}"
+            return failure_result(f"Timeout fetching {url}")
         except Exception as e:
             logger.error(f"FetchUrl error: {e}")
-            return f"Error fetching {url}: {str(e)}"
+            return failure_result(f"Error fetching {url}: {str(e)}")
 
     @staticmethod
     async def _fetch_and_parse(url: str) -> tuple[str, str]:

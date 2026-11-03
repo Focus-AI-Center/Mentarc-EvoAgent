@@ -19,6 +19,8 @@ from configs.settings import (
 from core.agent_compat import BaseTool
 from core.plugins.base import PluginMeta, register_plugin
 from utils.logger import logger
+from utils.tool_results import failure_result
+from utils.usage import record_provider_usage
 
 
 class ImageUnderstandingParams(BaseModel):
@@ -61,7 +63,7 @@ class ImageUnderstandingTool(BaseTool):
                 resp.raise_for_status()
         except Exception as e:
             logger.error(f"Image download failed: {e}")
-            return f"Image download failed: {str(e)}"
+            return failure_result(f"Image download failed: {str(e)}")
 
         content_type = resp.headers.get("content-type", "image/png")
         mime = content_type.split(";")[0].strip()
@@ -95,10 +97,11 @@ class ImageUnderstandingTool(BaseTool):
                 ],
                 max_completion_tokens=2000,
             )
+            record_provider_usage(result, category="vision", model=MODEL_VISION)
             content = result.choices[0].message.content
             if content:
                 return content
-            return "Could not obtain an image description."
+            return failure_result("Could not obtain an image description.")
         except Exception as e:
             logger.error(f"Vision model call failed: {e}")
-            return f"Image analysis failed: {str(e)}"
+            return failure_result(f"Image analysis failed: {str(e)}")

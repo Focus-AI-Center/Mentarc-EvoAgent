@@ -1,6 +1,7 @@
 """Compose SDK streaming, compaction and interruption-safe execution facts."""
 
 from contextlib import aclosing
+from uuid import uuid4
 
 from agents import RunHooks
 from agents.stream_events import RawResponsesStreamEvent
@@ -8,6 +9,8 @@ from agents.stream_events import RawResponsesStreamEvent
 from core.context_compaction import SDKContextCompaction
 from core.runtime.events import _stream_sdk_events
 from core.runtime.history import interrupted_output
+from core.runtime.usage import record_sdk_usage
+from utils.usage import current_usage
 
 
 def _identities(history):
@@ -134,7 +137,15 @@ class SDKRunSession:
     """One run's journal, event channel and compaction are composed here."""
 
     def __init__(
-        self, agent, compressor, history, tools, *, on_history=None, event_stream=_stream_sdk_events
+        self,
+        agent,
+        compressor,
+        history,
+        tools,
+        *,
+        on_history=None,
+        event_stream=_stream_sdk_events,
+        usage_category="main",
     ):
         self.journal = ExecutionJournal()
         self.tools, self.event_stream = tools, event_stream
@@ -143,6 +154,31 @@ class SDKRunSession:
         )
         self.result = None
         self.interrupted = False
+        self.usage_collector = current_usage()
+        self.usage_category = usage_category
+        self.run_id = uuid4().hex
+        self.model = agent.model if isinstance(agent.model, str) else type(agent.model).__name__
+        self.response_models = {}
+        self.response_count = 0
+
+    def observe(self, event):
+        self.journal.observe(event)
+        if (
+            isinstance(event, RawResponsesStreamEvent)
+            and getattr(event.data, "type", "") == "response.completed"
+        ):
+            response = event.data.response
+            index = self.response_count
+            self.response_count += 1
+            if getattr(response, "model", None):
+                self.response_models[index] = response.model
+            if self.usage_collector:
+                self.usage_collector.add(
+                    getattr(response, "model", None) or self.model,
+                    getattr(response, "usage", None),
+                    category=self.usage_category,
+                    key=(self.run_id, index),
+                )
 
     def start(self, run_streamed, agent, *, input, max_turns):
         self.result = run_streamed(agent, input=input, max_turns=max_turns, hooks=self.journal)
@@ -150,14 +186,21 @@ class SDKRunSession:
 
     async def stream(self):
         try:
-            async with aclosing(
-                self.event_stream(self.result, self.tools, observer=self.journal.observe)
-            ) as events:
+            async with aclosing(self.event_stream(self.result, self.tools, observer=self.observe)) as events:
                 async for event in events:
                     yield event
         except BaseException:
             self.interrupted = True
             raise
+        finally:
+            record_sdk_usage(
+                self.usage_collector,
+                self.result,
+                run_id=self.run_id,
+                model=self.model,
+                category=self.usage_category,
+                response_models=self.response_models,
+            )
 
     def snapshot(self):
         return self.journal.merge(self.compaction.snapshot(), interrupted=self.interrupted, tools=self.tools)

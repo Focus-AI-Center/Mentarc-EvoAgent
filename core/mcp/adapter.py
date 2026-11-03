@@ -10,6 +10,7 @@ from agents.run_context import RunContextWrapper
 
 from core.mcp.registry import MCPServerConfig
 from utils.logger import logger
+from utils.tool_results import failure_result
 
 
 class MCPConsumer(Protocol):
@@ -48,7 +49,11 @@ def _make_invoker(consumer: MCPConsumer, tool: str, timeout: float):
             return json.dumps(
                 {"error": f"invalid args JSON: {exc}", "error_type": "bad_args"}, ensure_ascii=False
             )
-        result = await consumer.call_tool(tool, args, timeout=timeout)
+        try:
+            result = await consumer.call_tool(tool, args, timeout=timeout)
+        except Exception:
+            logger.exception("MCP tool call failed: {}", tool)
+            return failure_result("MCP tool call failed")
         if not isinstance(result, dict):
             return json.dumps(
                 {"error": f"bad MCP response: {type(result).__name__}", "error_type": "bad_response"},
@@ -57,7 +62,7 @@ def _make_invoker(consumer: MCPConsumer, tool: str, timeout: float):
         if "error" in result:
             return json.dumps(result, ensure_ascii=False)
         text = _serialize_content(result.get("content") or [])
-        if result.get("is_error"):
+        if result.get("is_error") or result.get("isError"):
             return json.dumps(
                 {"error": text or "MCP tool reported error", "error_type": "tool_error"}, ensure_ascii=False
             )

@@ -16,6 +16,9 @@ Main and child agents share these components:
 | `core/runtime/execution.py` | One SDK run: execution journal, events and compaction |
 | `core/runtime/interruption.py` | Turn persistence and cancellation/closure adapter |
 | `core/runtime/sdk_client.py` | Shared proxy-aware SDK client initialization |
+| `core/runtime/questions.py` | End asking runs and resolve answers from saved question identity |
+| `core/runtime/delegation_context.py` | Current input/attachment snapshots and prior source references |
+| `core/runtime/usage.py` | Request usage scope and deduplicated SDK accounting |
 | `core/context_compaction.py` | Replace model history at SDK step boundaries |
 | `core/delegation.py` | Task identity, delivery receipts and automatic handoff |
 | `core/skills/tool_mounting.py` | Skill-specific tool grants and unloading |
@@ -37,6 +40,9 @@ Shared modules have explicit inputs and do not import either agent implementatio
 Existing delegation, compaction and skill modules retain their own boundaries;
 there is no general plugin registry or event bus for these lifecycle operations.
 The standalone session updater remains a separate flow.
+
+See [runtime contracts](runtime-contracts.md) for question boundaries and answer
+routing, delegation source separation, tool outcomes and measured usage.
 
 `SDKRunSession` composes the existing compaction adapter with an execution journal
 and SSE channel. The journal records each tool completion through SDK hooks,

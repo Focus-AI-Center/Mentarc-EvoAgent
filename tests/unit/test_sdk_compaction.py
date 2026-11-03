@@ -253,7 +253,6 @@ async def test_real_agent_entrypoints_persist_compacted_history(tmp_path, monkey
         saved = workspace.history_load("thread")
     else:
         monkeypatch.setattr(sub, "_ensure_sdk_client", lambda: None)
-        monkeypatch.setattr(sub, "OPENAI_API_KEY", "offline-test")
         monkeypatch.setattr(sub, "MODEL", model)
         monkeypatch.setattr(sub, "Runner", runner)
         monkeypatch.setattr(sub, "HistoryCompressor", lambda **kwargs: comp)
@@ -261,7 +260,6 @@ async def test_real_agent_entrypoints_persist_compacted_history(tmp_path, monkey
             sub.AgentTypeConfig(name="worker"), user_id="alice", session_id="thread", workspace=workspace
         )
         monkeypatch.setattr(child, "_build_tools", lambda: [huge])
-        monkeypatch.setattr(child, "_check_completion", AsyncMock(return_value=True))
         async for event in child.run_stream("one action"):
             if event.get("content") == "stream_end":
                 saved = workspace.history_load(child.session_id)

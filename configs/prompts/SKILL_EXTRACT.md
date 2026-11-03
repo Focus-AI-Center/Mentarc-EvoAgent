@@ -18,13 +18,15 @@ Skip simple questions, casual conversation and isolated tool calls. Do not inven
 ## Procedure
 
 1. Call `skill(action="list")` to avoid duplicates.
-2. Identify a new workflow or a meaningful improvement.
+2. Identify a new workflow or a meaningful improvement. For an improvement, read the existing skill before proposing a complete updated document and changed references.
 3. Output a valid JSON proposal between `[SKILL_PROPOSAL]` and `[/SKILL_PROPOSAL]`.
 4. Do not mutate skills during extraction (`save`, `patch`, `delete`, `ref_set` or `ref_del`). The system saves the bundle after user confirmation.
 
 ## Proposal fields
 
 - `name`: required; two to four lowercase English words separated by hyphens, such as `write-seo-report`.
+- `operation`: `create` for a new skill, or `update` for an existing skill. Omitted means `create` for legacy proposals.
+- `update_target`: required for an update; use the existing skill name and keep `name` identical. Updates preserve lifecycle metadata and omitted references after confirmation.
 - `description`: required; one specific sentence explaining purpose and trigger conditions. Prefer "Find buyer pain points in social posts and produce three sourced opportunities" over "Help with analysis".
 - `triggers`: required; three to five varied formal and conversational English phrases.
 - `instructions`: required; numbered steps identifying tools, necessary inputs and output format. Aim for 10-30 lines.

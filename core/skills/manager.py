@@ -52,16 +52,42 @@ class SkillManager:
     # --- CRUD ---
 
     def save_user_skill(self, user_id: str, skill: Skill) -> None:
-        """Save a skill to the user's skill set."""
+        """Create or replace supplied content, preserving an existing skill's lifecycle."""
         references = normalize_references(skill.references)
+        ws = self._ws(user_id)
+        raw = ws.skill_get(skill.name)
+        if raw:
+            previous = skill_from_md(raw, fallback_name=skill.name)
+            protected = {
+                "name",
+                "created_at",
+                "created_by",
+                "usage_count",
+                "version",
+                "success_rate",
+                "confidence",
+                "extracted_from",
+            }
+            updates = skill.model_dump(include=skill.model_fields_set - protected)
+            updates.pop("references", None)
+            merged = Skill.model_validate(previous.model_dump() | updates)
+            merged.version = previous.version + 1
+            merged.updated_at = datetime.now()
+            merged.references = references
+            # Keep the caller's object consistent with the stored representation.
+            for key in Skill.model_fields:
+                setattr(skill, key, getattr(merged, key))
+        else:
+            skill.created_by = user_id
         skill.references = references
         skill.instructions = with_reference_links(skill.instructions, references)
         skill.is_builtin = False
-        skill.created_by = user_id
-        ws = self._ws(user_id)
         for filename, content in references.items():
             ws.skill_ref_set(skill.name, filename, content)
         ws.skill_set(skill.name, skill_to_md(skill))
+
+    def skill_exists(self, user_id: str, name: str) -> bool:
+        return self._ws(user_id).skill_get(name) is not None
 
     def delete_user_skill(self, user_id: str, skill_name: str) -> bool:
         """Delete a user skill."""

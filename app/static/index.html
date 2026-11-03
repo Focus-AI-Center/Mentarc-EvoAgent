@@ -2622,7 +2622,7 @@ function replayDelegatedDelivery(events, rootBubble, sessionId) {
       } else if (event.code === 9 && data.tasks) {
         renderTodoPanel(bubble.parentElement, data.tasks);
       } else if (event.code === 10 && data.type === 'ask_user' && data.options) {
-        renderAskPanel(bubble.parentElement, data.question || '', data.options);
+        renderAskPanel(bubble.parentElement, data.question || '', data.options, questionAnswerRoute(data, event));
       }
     }
   }
@@ -3421,23 +3421,54 @@ function renderTodoPanel(msgDiv, tasks) {
   scrollToBottom();
 }
 
-function renderAskPanel(msgDiv, question, options) {
-  if (msgDiv.querySelector('.ask-panel')) return;
+function questionAnswerRoute(data, event = {}) {
+  if (!data.question_id) return null;
+  return {
+    question_id: data.question_id,
+    agent_type: event.task_id ? (event.source_agent || event.delivery_owner) : undefined,
+    task_id: event.task_id || undefined,
+  };
+}
+
+function renderAskPanel(msgDiv, question, options, answerTo = null) {
+  const key = answerTo && answerTo.question_id;
+  if (Array.from(msgDiv.querySelectorAll('.ask-panel')).some(panel =>
+      key ? panel.dataset.questionId === key : !panel.dataset.questionId)) return;
   var panel = document.createElement('div');
   panel.className = 'ask-panel';
+  if (key) panel.dataset.questionId = key;
   var bubble = msgDiv.querySelector('.bubble');
   if (bubble) bubble.after(panel);
   else msgDiv.appendChild(panel);
 
-  panel.innerHTML = '<div class="ask-panel-title">' + question + '</div>' +
-    options.map(function(o) {
-      var safeLabel = (o.label || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-      return '<div class="ask-option" onclick="useCard(\'' + safeLabel + '\')">' +
-        '<div class="ask-option-radio"></div>' +
-        '<div><div class="ask-option-label">' + (o.label || '') + '</div>' +
-        (o.description ? '<div class="ask-option-desc">' + o.description + '</div>' : '') +
-        '</div></div>';
-    }).join('');
+  const title = document.createElement('div');
+  title.className = 'ask-panel-title';
+  title.textContent = question;
+  panel.appendChild(title);
+  for (const option of options) {
+    const button = document.createElement('button');
+    button.className = 'ask-option';
+    button.textContent = option.label + (option.description ? ' — ' + option.description : '');
+    button.addEventListener('click', () => {
+      if (sending) return;
+      if (answerTo) inputEl.dataset.answerTo = JSON.stringify(answerTo);
+      useCard(option.label);
+    });
+    panel.appendChild(button);
+  }
+  const custom = document.createElement('input');
+  custom.type = 'text';
+  custom.placeholder = 'Your answer';
+  const submit = document.createElement('button');
+  submit.className = 'ask-option';
+  submit.textContent = 'Send answer';
+  submit.addEventListener('click', () => {
+    if (sending || !custom.value.trim()) return;
+    if (answerTo) inputEl.dataset.answerTo = JSON.stringify(answerTo);
+    useCard(custom.value.trim());
+  });
+  panel.appendChild(custom);
+  panel.appendChild(submit);
   scrollToBottom();
 }
 
@@ -3446,6 +3477,8 @@ async function send() {
   const hasImages = attachedImages.length > 0;
   if ((!userText && !attachedFile && !hasImages) || sending) return;
   const requestSessionId = sessionEl.value || 'default';
+  const answerTo = inputEl.dataset.answerTo ? JSON.parse(inputEl.dataset.answerTo) : undefined;
+  delete inputEl.dataset.answerTo;
 
   // Switch to chat view if on welcome screen
   if (!welcomeEl.classList.contains('hidden')) showChat();
@@ -3458,6 +3491,7 @@ async function send() {
   // Capture images before clearing
   const imageFilenames = attachedImages.map(img => img.filename);
   const imageUrls = attachedImages.map(img => img.url);
+  const fileMetadata = attachedFile ? [{ name: attachedFile.name }] : [];
 
   // Build the actual input sent to agent
   let text = '';
@@ -3492,7 +3526,8 @@ async function send() {
         userId: document.getElementById('userId').value || 'test',
         sessionId: requestSessionId,
         requestId: Math.random().toString(36).slice(2, 10),
-        data: { input: text, images: imageUrls },
+        answerTo,
+        data: { input: text, images: imageUrls, files: fileMetadata },
       }),
     });
 
@@ -3514,9 +3549,13 @@ async function send() {
         let event;
         try { event = JSON.parse(jsonStr); } catch { continue; }
 
-        const eventBubble = [2, 4, 5, 8, 9, 10, 12].includes(event.code)
+        const eventBubble = [0, 2, 4, 5, 8, 9, 10, 12].includes(event.code)
           ? taskStream.bubbleFor(event) : bubble;
-        if (event.code === 2) {
+        if (event.code === 0) {
+          const error = document.createElement('div');
+          error.textContent = event.content;
+          eventBubble.appendChild(error);
+        } else if (event.code === 2) {
           rawText = accumulateTaskText(taskTexts, event);
           const text = (bubbleTexts.get(eventBubble) || '') + event.content;
           bubbleTexts.set(eventBubble, text);
@@ -3574,7 +3613,8 @@ async function send() {
           if (m.total_ms) parts.push((m.total_ms / 1000).toFixed(1) + 's');
           if (m.steps) parts.push(m.steps + ' steps');
           if (m.tools && m.tools.length) parts.push(m.tools.join(', '));
-          if (m.tokens) parts.push((m.tokens / 1000).toFixed(1) + 'k tokens');
+          if (m.usage && m.usage.requests) parts.push((m.usage.total_tokens / 1000).toFixed(1) + 'k used tokens');
+          if (m.context_tokens || m.tokens) parts.push(((m.context_tokens || m.tokens) / 1000).toFixed(1) + 'k context tokens');
           if (m.skill) parts.push(skillLabel(m.skill.name) + ' · ' + m.skill.type);
           footer.textContent = parts.join(' · ');
           bubble.parentElement.appendChild(footer);
@@ -3618,7 +3658,7 @@ async function send() {
           try {
             const askData = JSON.parse(event.content);
             if (askData.type === 'ask_user' && askData.options) {
-              renderAskPanel(eventBubble.parentElement, askData.question || '', askData.options);
+              renderAskPanel(eventBubble.parentElement, askData.question || '', askData.options, questionAnswerRoute(askData, event));
             }
           } catch(e) { console.error('code 10 parse error:', e); }
         }
@@ -4224,10 +4264,17 @@ function parseSkillProposal(text) {
       || Object.values(references).some(content => typeof content !== 'string' || !content.trim())) {
     throw new Error('references must map file paths to nonempty text bodies');
   }
+  const operation = proposal.operation || (proposal.update_target ? 'update' : 'create');
+  if (!['create', 'update'].includes(operation)) throw new Error('Invalid proposal operation');
+  const target = proposal.update_target || proposal.name.trim();
+  if (operation === 'update' && target !== proposal.name.trim()) throw new Error('An update must keep the existing skill name');
+  const editableList = key => operation === 'update' && proposal[key] == null
+    ? undefined : list(proposal[key]);
   return {
+    operation, update_target: operation === 'update' ? target : null,
     name: proposal.name.trim(), description: proposal.description.trim(),
-    triggers: list(proposal.triggers), required_tools: list(proposal.required_tools),
-    instructions: proposal.instructions, references, tags: list(proposal.tags),
+    triggers: editableList('triggers'), required_tools: editableList('required_tools'),
+    instructions: proposal.instructions, references, tags: editableList('tags'),
   };
 }
 
@@ -4265,7 +4312,7 @@ function appendSkillProposals(bubble, rawText, sessionId) {
       card.appendChild(node);
       return node;
     };
-    addText('strong', proposal.name);
+    addText('strong', (proposal.operation === 'update' ? 'Update: ' : 'Create: ') + proposal.name);
     addText('p', proposal.description);
     const preview = (filename, content) => {
       const details = document.createElement('details');
@@ -4279,7 +4326,7 @@ function appendSkillProposals(bubble, rawText, sessionId) {
     };
     preview('SKILL.md', proposal.instructions);
     for (const [filename, content] of Object.entries(proposal.references)) preview('references/' + filename.replace(/^references\//, ''), content);
-    const save = addText('button', 'Confirm save (includes ' + Object.keys(proposal.references).length + ' reference files)');
+    const save = addText('button', 'Confirm ' + proposal.operation + ' (includes ' + Object.keys(proposal.references).length + ' reference files)');
     save.className = 'skill-confirm-btn';
     save.addEventListener('click', () => confirmSkillProposal(save, encoded));
     const skip = addText('button', 'Skip');
@@ -4295,17 +4342,25 @@ async function confirmSkillProposal(btn, proposalB64) {
   btn.disabled = true;
   btn.textContent = 'Saving...';
   try {
-    const res = await fetch('/api/skills/' + encodeURIComponent(userId) + '/create', {
-      method: 'POST',
+    const updating = proposal.operation === 'update';
+    const endpoint = updating ? '/' + encodeURIComponent(proposal.update_target || proposal.name) : '/create';
+    const payload = updating ? {
+      description: proposal.description, triggers: proposal.triggers,
+      instructions: proposal.instructions, required_tools: proposal.required_tools,
+      tags: proposal.tags, references: proposal.references,
+    } : proposal;
+    const res = await fetch('/api/skills/' + encodeURIComponent(userId) + endpoint, {
+      method: updating ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(proposal),
+      body: JSON.stringify(payload),
     });
     if (res.ok) {
       btn.closest('.skill-proposal-card').innerHTML = '<div style="color:#16a34a;font-weight:500">✓ Skill saved</div>';
       showSkillToast(proposal.name);
       loadSidebarSkills();
     } else {
-      btn.textContent = 'Save failed; retry';
+      const error = await res.json().catch(() => ({}));
+      btn.textContent = error.detail || 'Save failed; retry';
       btn.disabled = false;
     }
   } catch(e) {
@@ -4654,7 +4709,7 @@ async function restoreSession(sid) {
             try {
               var askd = JSON.parse(content);
               if (askd.type === 'ask_user' && askd.options) {
-                renderAskPanel(lastBotBubble.parentElement, askd.question || '', askd.options);
+                renderAskPanel(lastBotBubble.parentElement, askd.question || '', askd.options, questionAnswerRoute(askd));
               }
             } catch(e) {}
           } else {

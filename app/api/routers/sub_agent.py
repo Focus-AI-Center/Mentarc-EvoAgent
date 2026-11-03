@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.schema.agent import AgentRequest
+from core.runtime.delegation_context import request_input
 from core.sub_agent import SubAgentRunner, list_agent_types
 from utils.logger import logger
 
@@ -30,9 +31,7 @@ async def sub_agent_chat(agent_type: str, request: AgentRequest):
     user_id = str(request.userId)
     session_id = str(request.sessionId)
     request_id = request.requestId or str(uuid.uuid4())[:8]
-    user_input = request.data.input
-    if request.data.images:
-        user_input += "\n\n[User-uploaded images]\n" + "\n".join(request.data.images)
+    user_input = request_input(request.data.input, request.data.images, request.data.files)
 
     logger.info(
         f"Sub-agent chat: type={agent_type} user={user_id} session={session_id} input={user_input[:200]}..."
@@ -55,6 +54,8 @@ async def sub_agent_chat(agent_type: str, request: AgentRequest):
         )
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
+    runner.answer_to = request.answerTo.model_dump(exclude_none=True) if request.answerTo else None
+    runner.attachments = {"images": request.data.images, "files": request.data.files}
 
     async def generate():
         try:
@@ -63,7 +64,7 @@ async def sub_agent_chat(agent_type: str, request: AgentRequest):
                     event["requestId"] = request_id
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
-            logger.error(f"Sub-agent stream error: {e}", exc_info=True)
+            logger.opt(exception=True).error("Sub-agent stream error: {}", e)
             yield f"data: {json.dumps({'code': 3, 'content': f'error: {str(e)}', 'requestId': request_id})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")

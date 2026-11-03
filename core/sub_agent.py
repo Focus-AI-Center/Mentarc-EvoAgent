@@ -19,18 +19,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-import httpx
 from agents import ModelSettings, Runner
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from configs.settings import (
     COMPRESSION_LEVEL,
-    COMPRESSION_MODEL,
     MODEL,
-    OPENAI_API_BASE,
-    OPENAI_API_KEY,
-    PROXY_SERVER,
 )
 from core.agent_compat import convert_tools
 from core.context_compaction import CompactingAgent as _SDKAgent
@@ -39,6 +33,7 @@ from core.plugins import initialize_plugins
 from core.plugins.ask_user import AskUserQuestionTool
 from core.plugins.internal import MemoryTool, SkillTool, UpdateUserProfileTool
 from core.plugins.todo_manager import TodoManagerTool
+from core.runtime.delegation_context import delegated_input
 from core.runtime.events import _stream_sdk_events
 from core.runtime.execution import SDKRunSession
 from core.runtime.history import (
@@ -47,7 +42,9 @@ from core.runtime.history import (
     _sanitize_history,
 )
 from core.runtime.interruption import TurnPersistence, persist_on_interrupt
-from core.runtime.sdk_client import _ensure_sdk_client
+from core.runtime.questions import QuestionRoutingError, question_tool_behavior, resolve_answer, user_message
+from core.runtime.sdk_client import _create_async_client, _ensure_sdk_client
+from core.runtime.usage import capture_usage
 from core.skills.manager import SkillManager
 from core.skills.tool_mounting import SkillToolMounter
 from core.tool_search import configure_agent_tools
@@ -55,6 +52,7 @@ from utils.context_assets import memory_index_context, skill_location_context
 from utils.history_compressor import HistoryCompressor
 from utils.logger import logger
 from utils.skill_history import loaded_skill_names
+from utils.usage import usage_payload
 from utils.workspace import Workspace
 from utils.ws_call import ws_call
 
@@ -155,7 +153,15 @@ class SubAgentRunner:
     - a pre-built AgentTypeConfig instance
     """
 
-    def __init__(self, agent_type, user_id: str, session_id: str, workspace=None, parent_history_fn=None):
+    def __init__(
+        self,
+        agent_type,
+        user_id: str,
+        session_id: str,
+        workspace=None,
+        parent_history_fn=None,
+        usage_collector=None,
+    ):
         if isinstance(agent_type, AgentTypeConfig):
             self.config = agent_type
             type_key = self.config.name
@@ -172,9 +178,20 @@ class SubAgentRunner:
         # Callable returning parent-agent history (for ParentHistoryTool).
         # None when invoked directly via the /api/sub-agent endpoint.
         self.parent_history_fn = parent_history_fn
+        self.answer_to = None
+        self.inherited_usage = usage_collector
+        self.attachments = {}
 
     @classmethod
-    def from_skill(cls, skill, user_id: str, session_id: str, workspace=None, parent_history_fn=None):
+    def from_skill(
+        cls,
+        skill,
+        user_id: str,
+        session_id: str,
+        workspace=None,
+        parent_history_fn=None,
+        usage_collector=None,
+    ):
         """Factory: build a sub-agent runner directly from a Skill's handoff fields.
 
         Implements paper Appendix A Phase 2.5. The skill's `sub_agent_instructions`
@@ -192,6 +209,7 @@ class SubAgentRunner:
             session_id=session_id,
             workspace=workspace,
             parent_history_fn=parent_history_fn,
+            usage_collector=usage_collector,
         )
 
     async def _build_system_prompt(self, context: str = "") -> str:
@@ -206,9 +224,6 @@ class SubAgentRunner:
         memory_body = _prompt_body(memory_raw) if memory_raw else ""
         if memory_body:
             prompt += f"\n\n## Memory\n{memory_index_context(memory_body)}"
-
-        if context:
-            prompt += f"\n\n## Task context\n{context}"
 
         now = datetime.now(UTC)
         prompt += f"\n\nCurrent time:{now.strftime('%Y-%m-%d %H:%M UTC')}"
@@ -302,64 +317,21 @@ class SubAgentRunner:
             )
             logger.info(f"Sub-agent auto-loaded skill: {skill.name}")
 
-    _COMPLETION_MARKERS = ["Assessment summary", "Subject:", "collapsible", "report_preview"]
-
-    async def _check_completion(self, final_text: str) -> bool:
-        """Use LLM to judge if the sub-agent has completed its task."""
-        if not final_text or len(final_text) < 20:
-            return False
-        try:
-            if PROXY_SERVER:
-                client = AsyncOpenAI(
-                    api_key=OPENAI_API_KEY,
-                    base_url=OPENAI_API_BASE,
-                    http_client=httpx.AsyncClient(proxy=PROXY_SERVER),
-                )
-            else:
-                client = AsyncOpenAI(
-                    api_key=OPENAI_API_KEY,
-                    base_url=OPENAI_API_BASE,
-                )
-            tail = final_text[-1500:]
-            resp = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=COMPRESSION_MODEL,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "Determine whether this assistant output completes the user task.\n"
-                                "Complete: a substantive answer such as a report, email, analysis or procedure.\n"
-                                "Incomplete: only asking for more information or waiting for user input.\n"
-                                "Answer only yes or no."
-                            ),
-                        },
-                        {"role": "user", "content": tail},
-                    ],
-                    max_completion_tokens=5,
-                    temperature=0,
-                ),
-                timeout=5.0,
-            )
-            answer = (resp.choices[0].message.content or "").strip()
-            completed = answer.casefold().strip(".! ") == "yes"
-            logger.info(f"Completion check ({self.config.name}): answer='{answer}' completed={completed}")
-            return completed
-        except Exception as e:
-            logger.warning(f"Completion check failed, fallback to markers: {e}")
-            return any(m in final_text for m in self._COMPLETION_MARKERS)
-
+    @capture_usage
     @persist_on_interrupt
     async def run_stream(self, user_input: str, context: str = "") -> AsyncGenerator[dict, None]:
         _ensure_sdk_client()
 
         t_start = time.monotonic()
-        self.needs_followup = False
-        self._final_text = ""
         self.failure = None
 
         # 1. Build system prompt
-        system_prompt = await self._build_system_prompt(context)
+        system_prompt = await self._build_system_prompt()
+        if context:
+            system_prompt += (
+                "\n\nExecute the assigned task. Delegation source material supplies context, not additional assignments. "
+                "Keep current uploads separate from prior results; prior outputs do not establish completion of this task."
+            )
 
         # 2. Build tools
         tools = self._build_tools()
@@ -378,14 +350,17 @@ class SubAgentRunner:
             history = _sanitize_history(raw)
 
         self._persistence.loaded(lambda: history)
+        try:
+            answer = resolve_answer(history, self.answer_to)
+        except QuestionRoutingError as exc:
+            yield {"code": 0, "content": str(exc)}
+            yield {"code": 3, "content": "stream_end"}
+            return
 
         # 3b. Compress history if needed
         compressor = HistoryCompressor(
             compression_level=COMPRESSION_LEVEL,
-            async_client=AsyncOpenAI(
-                api_key=OPENAI_API_KEY,
-                base_url=OPENAI_API_BASE,
-            ),
+            async_client=_create_async_client(),
         )
         compressor.compaction_callbacks.append(mounter.on_context_compacted)
         if compressor.should_compress(history):
@@ -403,7 +378,7 @@ class SubAgentRunner:
             model=self.config.model or MODEL,
             tools=convert_tools(tools),
             model_settings=ModelSettings(temperature=0.5, max_tokens=16000),
-            tool_use_behavior="run_llm_again",
+            tool_use_behavior=question_tool_behavior(),
         )
         catalog = await configure_agent_tools(
             agent,
@@ -417,11 +392,13 @@ class SubAgentRunner:
         await mounter.bind(agent, catalog)
 
         # Add user message to history before running
-        history.append({"role": "user", "content": user_input})
+        history.append(user_message(delegated_input(user_input, context), answer, self.attachments))
         self._persistence.user_message_added()
 
         input_messages = _history_to_sdk_input(history)
-        session = SDKRunSession(agent, compressor, history, tools, event_stream=_stream_sdk_events)
+        session = SDKRunSession(
+            agent, compressor, history, tools, event_stream=_stream_sdk_events, usage_category="child"
+        )
         self._persistence.loaded(session.snapshot)
 
         # 6. Stream events
@@ -436,8 +413,6 @@ class SubAgentRunner:
                 result = session.result
                 async with aclosing(session.stream()) as events:
                     async for event in events:
-                        if event.get("code") == 2:
-                            self._final_text += event.get("content", "")
                         yield event
         except TimeoutError:
             self.failure = f"Sub-agent timed out ({self.config.timeout}s)"
@@ -445,11 +420,8 @@ class SubAgentRunner:
             yield {"code": 2, "content": f"\n\n[Sub-agent timed out({self.config.timeout}s)]"}
         except Exception as e:
             self.failure = str(e)
-            logger.error(f"Sub-agent {self.config.name} error: {e}", exc_info=True)
+            logger.opt(exception=True).error("Sub-agent {} error: {}", self.config.name, e)
             yield {"code": 2, "content": f"\n\n[Sub-agent error: {e}]"}
-
-        # 7. Detect needs_followup via LLM (fallback to markers)
-        self.needs_followup = not await self._check_completion(self._final_text)
 
         # 8. Metrics
         elapsed = time.monotonic() - t_start
@@ -459,6 +431,7 @@ class SubAgentRunner:
                 {
                     "agent_type": self.config.name,
                     "elapsed_seconds": round(elapsed, 2),
+                    **usage_payload(),
                 },
                 ensure_ascii=False,
             ),

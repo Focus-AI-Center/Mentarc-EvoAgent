@@ -66,7 +66,6 @@ def agents(workspace, monkeypatch):
     monkeypatch.setattr(main, "_ensure_sdk_client", lambda: None)
     monkeypatch.setattr(sub, "_ensure_sdk_client", lambda: None)
     monkeypatch.setattr(main.MCPToolManager, "create_tools", AsyncMock(return_value=[]))
-    monkeypatch.setattr(sub, "OPENAI_API_KEY", "offline-test")
 
     def make(model, tools=(), kind="main"):
         if kind == "main":
@@ -85,7 +84,6 @@ def agents(workspace, monkeypatch):
                 AgentTypeConfig(name="worker"), user_id="alice", session_id="thread", workspace=workspace
             )
             monkeypatch.setattr(agent, "_build_tools", lambda: list(tools))
-            monkeypatch.setattr(agent, "_check_completion", AsyncMock(return_value=True))
             monkeypatch.setattr(
                 sub, "_SDKAgent", lambda **kwargs: main._SDKAgent(**(kwargs | {"model": model}))
             )
@@ -294,9 +292,6 @@ async def test_interrupted_delegation_preserves_child_thread_and_parent_receipt(
 
         def _build_tools(self):
             return [tool]
-
-        async def _check_completion(self, text):
-            return False
 
     monkeypatch.setattr(sub, "MODEL", model_for_calls())
     monkeypatch.setattr(sub, "SubAgentRunner", Worker)

@@ -313,7 +313,6 @@ async def test_configured_child_skill_mounts_tools_and_history_is_saved_before_e
     import core.sub_agent as module
 
     monkeypatch.setattr(module, "_ensure_sdk_client", lambda: None)
-    monkeypatch.setattr(module, "OPENAI_API_KEY", "offline-test")
     monkeypatch.setattr(module, "DEFAULT_SUB_AGENT_TOOLS", [])
     monkeypatch.setattr(module.MCPToolManager, "create_tools", AsyncMock(return_value=[]))
 
@@ -339,7 +338,6 @@ async def test_configured_child_skill_mounts_tools_and_history_is_saved_before_e
         child = module.SubAgentRunner(
             config, user_id="alice", session_id="thread", workspace=runtime.workspace
         )
-        monkeypatch.setattr(child, "_check_completion", AsyncMock(return_value=True))
         async for event in child.run_stream("run"):
             if event.get("content") == "stream_end":
                 saved = runtime.workspace.history_load(child.session_id)

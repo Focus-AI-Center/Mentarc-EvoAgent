@@ -51,6 +51,13 @@ independent tasks and report failures without regenerating delivered artifacts.
 A waiting_user receipt means a question was delivered, not that the task is
 complete. Read pending_questions to route the user's answer to the original task.
 
+Calling ask_user_question ends the asking agent's run after its current tool
+batch completes. Ask only when that task needs a user answer before continuing.
+A child waiting for an answer does not stop independent parent tasks. Structured
+card answers retain their question identity and reuse the original task thread.
+Tool outcomes distinguish returned results from successful work, and artifact
+references identify generated outputs rather than ordinary source links.
+
 When compression unloads skill instructions, reload the original document with
 skill(get) before executing that workflow. Loading a skill grants its required
 tools for the next model step; do not load a guide and invoke a newly granted

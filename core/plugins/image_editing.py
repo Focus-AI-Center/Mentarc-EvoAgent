@@ -13,6 +13,7 @@ from core.agent_compat import BaseTool
 from core.plugins.base import PluginMeta, register_plugin
 from utils.image_upload import upload_image
 from utils.logger import logger
+from utils.tool_results import failure_result
 
 DOUBAO_API_BASE = os.getenv("DOUBAO_API_BASE", "https://ark.cn-beijing.volces.com/api/v3")
 _MAX_RETRIES = 2
@@ -58,9 +59,9 @@ class ImageEditingTool(BaseTool):
 
     async def __call__(self, params: ImageEditingParams) -> str:
         if not DOUBAO_API_KEY:
-            return "Error: DOUBAO_API_KEY not configured."
+            return failure_result("Error: DOUBAO_API_KEY not configured.")
         if not self.user_id:
-            return "Error: user_id required."
+            return failure_result("Error: user_id required.")
 
         # Load source images
         loaded = []
@@ -69,7 +70,7 @@ class ImageEditingTool(BaseTool):
                 b64, mime = await self._load_image(src)
                 loaded.append(f"data:{mime};base64,{b64}")
             except Exception as e:
-                return f"Failed to load image {src}: {e}"
+                return failure_result(f"Failed to load image {src}: {e}")
 
         # Call Doubao edit API
         url = os.getenv("DOUBAO_EDITS_URL") or f"{DOUBAO_API_BASE}/images/edits"
@@ -95,12 +96,12 @@ class ImageEditingTool(BaseTool):
                     if resp.status_code in {502, 503, 504} and attempt < _MAX_RETRIES:
                         await asyncio.sleep(2**attempt)
                         continue
-                    return f"Image editing failed: HTTP {resp.status_code}"
+                    return failure_result(f"Image editing failed: HTTP {resp.status_code}")
 
                 data_list = resp.json().get("data", [])
                 images_b64 = [item["b64_json"] for item in data_list if item.get("b64_json")]
                 if not images_b64:
-                    return "No image data in response"
+                    return failure_result("No image data in response")
 
                 img_bytes = base64.b64decode(images_b64[0])
                 img_url = upload_image(img_bytes, ext="png", user_id=self.user_id)
@@ -118,12 +119,12 @@ class ImageEditingTool(BaseTool):
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(2**attempt)
                     continue
-                return f"Image editing timeout ({_TIMEOUT}s)"
+                return failure_result(f"Image editing timeout ({_TIMEOUT}s)")
             except Exception as e:
                 logger.error(f"Image editing error: {e}")
-                return f"Image editing failed: {e}"
+                return failure_result(f"Image editing failed: {e}")
 
-        return "Image editing failed: all retries exhausted"
+        return failure_result("Image editing failed: all retries exhausted")
 
     async def _load_image(self, source: str) -> tuple[str, str]:
         """Load image from URL, workspace, or local path. Returns (b64, mime)."""

@@ -73,6 +73,9 @@ typed resource references across compression:
 
 - Task receipts retain the owner, task ID, status and pending questions. Long
   receipt prose and duplicate file lists do not consume the index budget.
+- Pending question identities and answer routes follow a deterministic path.
+  Answered questions are removed, including when an old waiting receipt remains
+  in a summary. Questions that cannot fit the recovery budget prevent compression.
 - Skill pointers contain the skill name and, when relevant, its reference path.
   They instruct the agent to reload originals and do not establish that a guide
   is currently loaded.

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from app.schema.agent import AgentRequest
 from core.agent import EvoAgent, run_session_update_stream
 from core.plugins.internal import _FRONTMATTER_RE, _PARAM_TO_FIELD, _parse_user_fields
+from core.runtime.delegation_context import request_input
 from utils.extractors import INPUT_EXTRACTORS, OUTPUT_EXTRACTORS
 from utils.logger import logger
 from utils.ws_call import ws_call
@@ -35,9 +36,7 @@ async def chat(request: AgentRequest, req: Request):
     user_id = str(request.userId)
     session_id = str(request.sessionId)
     request_id = request.requestId or str(uuid.uuid4())[:8]
-    user_input = request.data.input
-    if request.data.images:
-        user_input += "\n\n[User-uploaded images]\n" + "\n".join(request.data.images)
+    user_input = request_input(request.data.input, request.data.images, request.data.files)
 
     logger.info(
         f"Chat request: user={user_id} session={session_id} "
@@ -55,6 +54,9 @@ async def chat(request: AgentRequest, req: Request):
         model=request.modelType,
         workspace=workspace,
         task_id=request.taskId,
+        answer_to=request.answerTo.model_dump(exclude_none=True) if request.answerTo else None,
+        attachments={"images": request.data.images, "files": request.data.files},
+        original_input=request.data.input,
     )
 
     # Read user profile for input-side extraction
@@ -100,7 +102,7 @@ async def chat(request: AgentRequest, req: Request):
 
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
-            logger.error(f"Stream error: {e}", exc_info=True)
+            logger.opt(exception=True).error("Stream error: {}", e)
             yield f"data: {json.dumps({'code': 3, 'content': f'error: {str(e)}', 'requestId': request_id})}\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")

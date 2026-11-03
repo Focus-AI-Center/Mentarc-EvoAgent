@@ -15,6 +15,7 @@ from core.skills import Skill, SkillMatchResult
 from core.skills.manager import SkillManager
 from utils.embedding import cosine_similarity, get_embedding
 from utils.logger import logger
+from utils.usage import record_provider_usage
 
 
 class SkillMatcher:
@@ -145,6 +146,7 @@ class SkillMatcher:
                 temperature=0.1,
                 max_completion_tokens=100,
             )
+            record_provider_usage(response, category="skill_matching", model=COMPRESSION_MODEL)
             answer = response.choices[0].message.content.strip().strip('"')
 
             if answer and answer != "null" and answer in skills:

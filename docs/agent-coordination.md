@@ -82,9 +82,16 @@ include `failures`; they must not be presented as successful completion.
 
 The child owns its delivery. The parent should continue independent work, report
 failures accurately and avoid repeating visible output or regenerating files.
-For a revision, delegate again with the same owner and task ID. This version
-keeps the existing model-directed follow-up flow; it does not add merged
-question cards or a separate resume scheduler.
+For a revision, delegate again with the same owner and task ID. Question cards
+include a question ID; answers carrying `answerTo` are resolved from saved history
+and routed to the original worker before skill matching. Plain text follow-ups
+retain model-directed routing. There are no merged question cards or separate
+resume scheduler. See [runtime contracts](runtime-contracts.md).
+
+Receipts also retain typed `artifacts` and per-call `tool_outcomes`. Only output
+references that appear in visible body/preview events enter `artifact_refs`;
+ordinary source links are not classified as generated artifacts. Tool errors
+remain distinct from fatal run failures and visible delivery status.
 
 Complete skill proposals are delivered through code 12, including reference
 bodies. Proposal blocks are withheld from ordinary text streaming even when

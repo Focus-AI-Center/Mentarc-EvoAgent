@@ -17,11 +17,18 @@ class MCPService(BaseModel):
     headers: dict[str, str] = {}
 
 
+class QuestionAnswer(BaseModel):
+    question_id: str = Field(min_length=1, max_length=128)
+    agent_type: str | None = Field(default=None, max_length=128)
+    task_id: str | None = Field(default=None, pattern=TASK_ID_PATTERN)
+
+
 class AgentRequest(BaseModel):
     userId: str | int
     sessionId: str | int
     requestId: str | None = None
     taskId: str | None = Field(default=None, pattern=TASK_ID_PATTERN)
+    answerTo: QuestionAnswer | None = None
     data: UserInput
     plugins: list[str] | None = None
     prompt: str | None = None

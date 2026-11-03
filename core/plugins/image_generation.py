@@ -13,6 +13,7 @@ from core.agent_compat import BaseTool
 from core.plugins.base import PluginMeta, register_plugin
 from utils.image_upload import upload_image
 from utils.logger import logger
+from utils.tool_results import failure_result
 
 # Doubao API (Volcengine / OpenAI-compatible)
 DOUBAO_API_BASE = os.getenv("DOUBAO_API_BASE", "https://ark.cn-beijing.volces.com/api/v3")
@@ -67,9 +68,9 @@ class ImageGenerationTool(BaseTool):
 
     async def __call__(self, params: ImageGenerationParams) -> str:
         if not DOUBAO_API_KEY:
-            return "Error: DOUBAO_API_KEY not configured."
+            return failure_result("Error: DOUBAO_API_KEY not configured.")
         if not self.user_id:
-            return "Error: user_id required."
+            return failure_result("Error: user_id required.")
 
         url = os.getenv("DOUBAO_GENERATIONS_URL") or f"{DOUBAO_API_BASE}/images/generations"
         size = _aspect_ratio_to_size(params.aspect_ratio)
@@ -93,12 +94,12 @@ class ImageGenerationTool(BaseTool):
                     if resp.status_code in {502, 503, 504} and attempt < _MAX_RETRIES:
                         await asyncio.sleep(2**attempt)
                         continue
-                    return f"Image generation failed: HTTP {resp.status_code}"
+                    return failure_result(f"Image generation failed: HTTP {resp.status_code}")
 
                 data_list = resp.json().get("data", [])
                 images_b64 = [item["b64_json"] for item in data_list if item.get("b64_json")]
                 if not images_b64:
-                    return "No image data in response"
+                    return failure_result("No image data in response")
 
                 img_bytes = base64.b64decode(images_b64[0])
                 img_url = upload_image(img_bytes, ext="png", user_id=self.user_id)
@@ -116,9 +117,9 @@ class ImageGenerationTool(BaseTool):
                 if attempt < _MAX_RETRIES:
                     await asyncio.sleep(2**attempt)
                     continue
-                return f"Image generation timeout ({_TIMEOUT}s)"
+                return failure_result(f"Image generation timeout ({_TIMEOUT}s)")
             except Exception as e:
                 logger.error(f"Image generation error: {e}")
-                return f"Image generation failed: {e}"
+                return failure_result(f"Image generation failed: {e}")
 
-        return "Image generation failed: all retries exhausted"
+        return failure_result("Image generation failed: all retries exhausted")

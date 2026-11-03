@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from configs.settings import OPENAI_API_BASE, OPENAI_API_BASE_SECONDARY, OPENAI_API_KEY
 from utils.logger import logger
+from utils.usage import record_provider_usage
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE") or OPENAI_API_BASE_SECONDARY or OPENAI_API_BASE
@@ -29,6 +30,7 @@ def get_embedding(text: str) -> list[float]:
             model=EMBEDDING_MODEL,
             input=text,
         )
+        record_provider_usage(response, category="embedding", model=EMBEDDING_MODEL)
         return response.data[0].embedding
     except Exception as e:
         logger.error(f"Embedding failed: {e}")
@@ -57,6 +59,7 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float]]:
             model=EMBEDDING_MODEL,
             input=texts,
         )
+        record_provider_usage(response, category="embedding", model=EMBEDDING_MODEL)
         return [item.embedding for item in response.data]
     except Exception as e:
         logger.error(f"Batch embedding failed: {e}")

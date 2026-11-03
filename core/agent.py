@@ -38,6 +38,7 @@ from core.plugins.internal import (
     UpdateUserProfileTool,
 )
 from core.plugins.todo_manager import TodoManagerTool
+from core.runtime.delegation_context import delegation_snapshot
 from core.runtime.events import _attach_delivery_events as _attach_delivery_events
 from core.runtime.events import _find_sub_agent_tool, _stream_sdk_events
 from core.runtime.execution import SDKRunSession
@@ -48,7 +49,9 @@ from core.runtime.history import (
     _sdk_result_to_history,
 )
 from core.runtime.interruption import TurnPersistence, persist_on_interrupt
+from core.runtime.questions import QuestionRoutingError, question_tool_behavior, resolve_answer, user_message
 from core.runtime.sdk_client import _create_async_client, _ensure_sdk_client
+from core.runtime.usage import capture_usage, record_sdk_usage
 from core.skills import Skill, skill_to_md
 from core.skills.manager import SkillManager
 from core.skills.matcher import SkillMatcher
@@ -58,6 +61,7 @@ from utils.context_assets import memory_index_context, skill_location_context
 from utils.history_compressor import HistoryCompressor
 from utils.logger import logger
 from utils.skill_history import loaded_skill_names
+from utils.usage import current_usage, usage_payload, usage_scope
 from utils.workspace import Workspace
 from utils.ws_call import ws_call
 
@@ -78,11 +82,19 @@ class EvoAgent:
         model: str = None,
         workspace=None,
         task_id: str | None = None,
+        answer_to: dict | None = None,
+        attachments: dict | None = None,
+        original_input: str | None = None,
     ):
         self.user_id = user_id
         self.session_id = session_id
         self.model = model or MODEL
         self.task_id = task_id
+        self.answer_to = answer_to
+        self.attachments = attachments or {}
+        self.original_input = original_input
+        self._answer = None
+        self._delegation_snapshot = None
 
         # Per-user workspace (local filesystem)
         self.workspace = workspace or Workspace(user_id)
@@ -137,6 +149,7 @@ class EvoAgent:
                 session_id=session_id,
                 workspace=self.workspace,
                 parent_history_fn=lambda: self.history,
+                context_fn=lambda: self._delegation_snapshot,
             )
         )
 
@@ -296,17 +309,20 @@ class EvoAgent:
             await self._skill_tools.on_loaded(result.skill.name, skill_to_md(result.skill))
         return result.skill
 
-    async def _handle_sub_agent_handoff(self, user_input: str):
+    async def _handle_sub_agent_handoff(self, user_input: str, *, params=None):
         """Automatic routing uses the same task execution and receipt protocol."""
         started = time.monotonic()
-        skill = self._match_result.skill
-        params = SubAgentParams(
-            task=user_input,
-            agent_type=skill.sub_agent_name or skill.name,
-            task_id=self.task_id or automatic_task_id(skill.name),
-        )
+        skill = self._match_result.skill if self._match_result and params is None else None
+        if params is None:
+            params = SubAgentParams(
+                task=user_input,
+                agent_type=skill.sub_agent_name or skill.name,
+                task_id=self.task_id or automatic_task_id(skill.name),
+            )
         # Parent-history reads must see this turn, just as explicit delegation does.
-        self.history.append({"role": "user", "content": user_input})
+        self.history.append(
+            user_message(user_input, getattr(self, "_answer", None), getattr(self, "attachments", None))
+        )
         if getattr(self, "_persistence", None):
             self._persistence.user_message_added()
         yield {"code": 3, "content": "stream_start"}
@@ -321,8 +337,9 @@ class EvoAgent:
                 "content": json.dumps(
                     {
                         "total_ms": int((time.monotonic() - started) * 1000),
-                        "skill": {"name": skill.name, "type": "handoff"},
+                        "skill": {"name": skill.name, "type": "handoff"} if skill else None,
                         "task_id": params.task_id,
+                        **usage_payload(),
                     }
                 ),
             }
@@ -460,7 +477,7 @@ class EvoAgent:
                 max_tokens=16000,
                 top_p=0.7,
             ),
-            tool_use_behavior="run_llm_again",
+            tool_use_behavior=question_tool_behavior(),
         )
         catalog = await configure_agent_tools(
             agent,
@@ -471,14 +488,14 @@ class EvoAgent:
 
     async def _stream_agent_events(self, user_input: str) -> AsyncGenerator[dict, None]:
         """Run the SDK agent with streaming and yield SSE-compatible events."""
-        # Build input messages: history + new user message
-        input_messages = _history_to_sdk_input(self.history)
-        input_messages.append({"role": "user", "content": user_input})
-
         # Add user message to history BEFORE running agent
-        self.history.append({"role": "user", "content": user_input})
+        self.history.append(
+            user_message(user_input, getattr(self, "_answer", None), getattr(self, "attachments", None))
+        )
         if getattr(self, "_persistence", None):
             self._persistence.user_message_added()
+
+        input_messages = _history_to_sdk_input(self.history)
 
         agent = await self._create_sdk_agent()
         session = SDKRunSession(
@@ -500,6 +517,7 @@ class EvoAgent:
         finally:
             self.history = session.snapshot()
 
+    @capture_usage
     @persist_on_interrupt
     async def run_stream(self, user_input: str) -> AsyncGenerator[dict, None]:
         """Run the agent in streaming mode.
@@ -513,6 +531,28 @@ class EvoAgent:
         # 1. Load session data (history + context)
         await self.load_session()
 
+        source_input = self.original_input if self.original_input is not None else user_input
+        self._delegation_snapshot = delegation_snapshot(source_input, self.history, self.attachments)
+
+        try:
+            self._answer = resolve_answer(self.history, self.answer_to)
+        except QuestionRoutingError as exc:
+            yield {"code": 0, "content": str(exc)}
+            yield {"code": 3, "content": "stream_end"}
+            return
+        self._delegation_snapshot["answer_to"] = self._answer
+        if self._answer and self._answer.get("task_id"):
+            self._match_result = None
+            params = SubAgentParams(
+                task=user_input,
+                agent_type=self._answer["agent_type"],
+                task_id=self._answer["task_id"],
+                context="Answer to the saved question: " + json.dumps(self._answer, ensure_ascii=False),
+            )
+            async for event in self._handle_sub_agent_handoff(user_input, params=params):
+                yield event
+            return
+
         # 2. Compress history if needed (before skill injection)
         if self._compressor.should_compress(self.history):
             self.history = await self._compressor.compress_history(self.history)
@@ -520,7 +560,8 @@ class EvoAgent:
 
         # 3. Skill matching (appends synthetic messages after compressed history)
         self._match_result = None
-        await self._match_skill(user_input)
+        if not self._answer:
+            await self._match_skill(user_input)
 
         # 3.5. Trigger-based sub-agent handoff (paper Appendix A, Phase 2.5).
         # If the matched skill declares `requires_sub_agent`, bypass main agent:
@@ -600,6 +641,8 @@ class EvoAgent:
                         "steps": steps,
                         "tools": list(tools_used),
                         "tokens": count_messages_tokens(self.history),
+                        "context_tokens": self._compressor.calculate_history_tokens(self.history),
+                        **usage_payload(),
                         "skill": skill_info,
                     }
                 ),
@@ -625,6 +668,16 @@ class EvoAgent:
 
 
 async def run_session_update_stream(
+    user_id: str, session_id: str, workspace: "Workspace" = None
+) -> AsyncGenerator[dict, None]:
+    """Review a session with its own usage scope, separate from online turns."""
+    with usage_scope():
+        async with aclosing(_run_session_update_stream(user_id, session_id, workspace)) as events:
+            async for event in events:
+                yield event
+
+
+async def _run_session_update_stream(
     user_id: str, session_id: str, workspace: "Workspace" = None
 ) -> AsyncGenerator[dict, None]:
     """Lightweight agent that reviews session history and updates user profile/memory.
@@ -702,13 +755,22 @@ async def run_session_update_stream(
 
     # 5. Stream events
     yield {"code": 3, "content": "stream_start"}
+    result = None
+    run_id = uuid4().hex
     try:
         result = Runner.run_streamed(agent, input=input_messages, max_turns=10)
-        async for event in _stream_sdk_events(result, tools):
-            yield event
+        async with aclosing(_stream_sdk_events(result, tools)) as events:
+            async for event in events:
+                yield event
     except Exception as e:
         logger.error(f"Update agent failed: {e}")
         yield {"code": 2, "content": f"Update failed: {str(e)}"}
+    finally:
+        record_sdk_usage(current_usage(), result, run_id=run_id, model=MODEL, category="session_review")
+
+    if result is None:
+        yield {"code": 3, "content": "stream_end"}
+        return
 
     # Save updated history
     try:
@@ -725,5 +787,6 @@ async def run_session_update_stream(
     except Exception as e:
         logger.error(f"Failed to save update context to session: {e}")
 
+    yield {"code": 6, "content": json.dumps(usage_payload(), ensure_ascii=False)}
     yield {"code": 3, "content": "stream_end"}
     logger.info(f"Session update completed for user {user_id}")

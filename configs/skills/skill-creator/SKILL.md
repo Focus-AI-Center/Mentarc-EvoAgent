@@ -100,6 +100,13 @@ skill(action="patch", name="write-seo-report", ref_filename="report-template.md"
 
 For a complete rewrite or metadata changes, save the same skill name with the complete updated main text and changed references. Matching references are replaced; omitted files are retained. Delete an obsolete reference with `ref_del`. During extraction, propose changes for confirmation before using any write action, including `patch`.
 
+An update preserves creation details, usage history and omitted dependencies or
+handoff configuration; full saves advance the version. For a proposed update,
+read the original first and include `operation="update"` and `update_target`
+equal to the existing name. Keep `name` identical. The confirmation UI applies
+an update rather than trying to create the same skill again. New proposals use
+`operation="create"` and duplicate creation is rejected.
+
 ## Validation
 
 Before saving, verify the name, specific description, varied triggers, declared tools, numbered steps, concise main document, explicit resource links and boundary behavior. Use `references/skill-creator-original.md` for the extended general guide when available.

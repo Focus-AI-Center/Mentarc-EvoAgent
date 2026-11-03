@@ -7,6 +7,7 @@ clickable option cards; the user's selection is sent as a new message.
 """
 
 import json
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -19,7 +20,7 @@ class OptionItem(BaseModel):
 
 
 class AskUserQuestionParams(BaseModel):
-    question: str = Field(description="Question for the user")
+    question: str = Field(min_length=1, description="Question for the user")
     options: list[OptionItem] = Field(description="Options with a label and optional description")
 
 
@@ -35,6 +36,7 @@ class AskUserQuestionTool(BaseTool):
     async def __call__(self, params: AskUserQuestionParams) -> str:
         result = {
             "type": "ask_user",
+            "question_id": uuid4().hex,
             "question": params.question,
             "options": [{"label": o.label, "description": o.description} for o in params.options],
         }

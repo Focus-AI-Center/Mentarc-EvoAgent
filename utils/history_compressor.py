@@ -22,10 +22,12 @@ from configs.settings import (
     OPENAI_API_KEY,
     PROXY_SERVER,
 )
+from core.runtime.questions import model_user_content, pending_questions
 from utils.context_recovery import ASSET_MARK, CONTINUATION_NOTE, render_index, split_transcript
 from utils.logger import logger
 from utils.skill_history import skill_loads, unload_skill_documents
 from utils.token_counter import count_tokens
+from utils.usage import record_provider_usage
 
 
 class CompressionUnavailable(RuntimeError):
@@ -125,8 +127,9 @@ class HistoryCompressor:
             callback()
 
     def calculate_history_tokens(self, history):
-        model_history = [
-            {
+        model_history = []
+        for message in history:
+            record = {
                 key: value
                 for key, value in message.items()
                 if key
@@ -135,10 +138,14 @@ class HistoryCompressor:
                     "delegation_receipts",
                     "skill_reloads",
                     "context_assets",
+                    "pending_questions",
+                    "answer_to",
+                    "attachments",
                 )
             }
-            for message in history
-        ]
+            if message.get("role") == "user" and message.get("answer_to"):
+                record["content"] = model_user_content(message)
+            model_history.append(record)
         return count_tokens(json.dumps(model_history, ensure_ascii=False, default=str))
 
     def should_compress(self, history):
@@ -178,7 +185,7 @@ class HistoryCompressor:
     @staticmethod
     def _render_message_for_summary(message):
         role = message.get("role", "unknown")
-        content = message.get("content") or ""
+        content = model_user_content(message)
         if not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=False)
         if content.lstrip().startswith("<summary>"):
@@ -224,6 +231,7 @@ class HistoryCompressor:
             )
         except Exception as exc:
             raise CompressionUnavailable(f"summary request failed: {type(exc).__name__}") from exc
+        record_provider_usage(response, category="compression", model=COMPRESSION_MODEL)
         choices = getattr(response, "choices", None)
         choice = choices[0] if choices else None
         if choice is None or getattr(choice, "finish_reason", None) != "stop":
@@ -335,6 +343,7 @@ class HistoryCompressor:
             HistoryCompressor.delegation_receipts(messages),
             HistoryCompressor.skill_reload_index(messages),
             COMPRESSION_ASSET_INDEX_CHARS,
+            questions=list(pending_questions(messages).values()),
         )[0]
 
     async def compress_history(self, history):
@@ -360,7 +369,10 @@ class HistoryCompressor:
                     return history
                 receipts = self.delegation_receipts(conversation)
                 reloads = self.skill_reload_index(prepared)
-                index, assets = render_index(conversation, receipts, reloads, self.asset_index_chars)
+                questions = list(pending_questions(conversation).values())
+                index, assets = render_index(
+                    conversation, receipts, reloads, self.asset_index_chars, questions=questions
+                )
                 async with asyncio.timeout(self.timeout_seconds):
                     summary = await self.summarize_conversation_segment(older)
                 if (
@@ -379,6 +391,7 @@ class HistoryCompressor:
                         "delegation_receipts": receipts,
                         "skill_reloads": reloads,
                         "context_assets": assets,
+                        "pending_questions": questions,
                     }
                 ] + tail
         except (TimeoutError, CompressionUnavailable, ValueError) as exc:

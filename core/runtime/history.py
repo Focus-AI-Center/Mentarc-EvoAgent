@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from agents.items import MessageOutputItem, ToolCallItem, ToolCallOutputItem
 
+from core.runtime.questions import model_user_content
 from utils.tool_names import canonical_tool_name
 
 
@@ -29,7 +30,7 @@ def _history_to_sdk_input(history: list[dict]) -> list[dict]:
                     }
                 )
             continue
-        content = msg.get("content")
+        content = model_user_content(msg)
         if content is None:
             content = ""
         if str(content).strip() or role != "assistant":

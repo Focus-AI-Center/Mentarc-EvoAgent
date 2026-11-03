@@ -8,6 +8,7 @@ from configs.settings import TAVILY_API_KEY
 from core.agent_compat import BaseTool
 from core.plugins.base import PluginMeta, register_plugin
 from utils.logger import logger
+from utils.tool_results import failure_result
 
 
 class WebSearchParams(BaseModel):
@@ -35,7 +36,7 @@ class WebSearchTool(BaseTool):
 
         try:
             if not TAVILY_API_KEY:
-                return "Error: TAVILY_API_KEY not configured."
+                return failure_result("Error: TAVILY_API_KEY not configured.")
 
             from tavily import TavilyClient
 
@@ -57,4 +58,4 @@ class WebSearchTool(BaseTool):
             return body + meta
         except Exception as e:
             logger.error(f"WebSearch error: {e}")
-            return f"Search failed: {str(e)}"
+            return failure_result(f"Search failed: {str(e)}")

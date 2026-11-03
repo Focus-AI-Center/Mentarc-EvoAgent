@@ -17,12 +17,14 @@ from pydantic import BaseModel, Field, field_validator
 
 from core.agent_compat import BaseTool
 from core.delegation import TASK_ID_PATTERN, new_task_id, run_delegation, task_session_base
+from core.runtime.delegation_context import render_delegation_context
 from core.skills.manager import SkillManager
 from utils.context_assets import memory_index_notice, skill_location_context
 from utils.logger import logger
 from utils.memory_index import MEMORY_TYPES, MemoryIndexEntry, parse_memory_index
 from utils.skill_references import normalize_reference_path, normalize_references
 from utils.tool_names import normalize_tool_references
+from utils.usage import current_usage
 from utils.workspace import Workspace
 from utils.ws_call import ws_call
 
@@ -365,7 +367,11 @@ class SkillTool(BaseTool):
             source=params.source if params.source in ("user_defined", "extracted") else "user_defined",
             extracted_from=self._session_id,
         )
+        for key in ("source", "triggers", "required_tools", "tags"):
+            if key not in params.model_fields_set:
+                skill.model_fields_set.discard(key)
         self._skill_manager.save_user_skill(self._user_id, skill)
+        self._got_skills.discard(params.name)
         logger.info(f"Saved skill '{params.name}' for user {self._user_id}")
         return f"Skill '{params.name}' saved and effective immediately."
 
@@ -380,7 +386,12 @@ class SkillTool(BaseTool):
             return "patch requires name, nonempty old_string and explicit new_string (empty is allowed)."
         try:
             await ws_call(
-                self._ws, "skill_patch", params.name, params.old_string, params.new_string, params.ref_filename
+                self._ws,
+                "skill_patch",
+                params.name,
+                params.old_string,
+                params.new_string,
+                params.ref_filename,
             )
         finally:
             # A patch or stale match must not prevent re-reading current text.
@@ -1233,7 +1244,13 @@ class SubAgentTool(BaseTool):
     param_anno = SubAgentParams
 
     def __init__(
-        self, user_id: str = "", session_id: str = "", workspace=None, parent_history_fn=None, **kwargs
+        self,
+        user_id: str = "",
+        session_id: str = "",
+        workspace=None,
+        parent_history_fn=None,
+        context_fn=None,
+        **kwargs,
     ):
         super().__init__(**kwargs)
         self._user_id = user_id
@@ -1242,6 +1259,7 @@ class SubAgentTool(BaseTool):
         # Callable returning the live parent-agent history. When set, the
         # sub-agent will get a `parent_history` tool it can use on demand.
         self._parent_history_fn = parent_history_fn
+        self._context_fn = context_fn
         self.event_sink = None
         self.deliveries = {}
         self._inflight = {}
@@ -1266,6 +1284,7 @@ class SubAgentTool(BaseTool):
             session_id=task_session_base(self._session_id, task_id),
             workspace=self._workspace,
             parent_history_fn=self._parent_history_fn,
+            usage_collector=current_usage(),
         )
         try:
             if skill:
@@ -1322,7 +1341,12 @@ class SubAgentTool(BaseTool):
             if sink:
                 await sink(frame)
 
-        receipt = await run_delegation(runner, params.task, params.context or "", task_id, record)
+        snapshot = self._context_fn() if self._context_fn else None
+        answer = (snapshot or {}).get("answer_to")
+        if answer and answer.get("task_id") == task_id and answer.get("agent_type") == params.agent_type:
+            runner.answer_to = {"question_id": answer["question_id"]}
+        context = render_delegation_context(snapshot, params.context or "")
+        receipt = await run_delegation(runner, params.task, context, task_id, record)
         self._inflight.pop(delivery_id, None)
         receipt["delivery_id"] = delivery_id
         self.deliveries[delivery_id] = events

@@ -15,6 +15,7 @@ from agents import FunctionTool
 from agents.run_context import RunContextWrapper
 
 from utils.logger import logger
+from utils.tool_results import normalize_tool_result
 
 
 class ToolResult:
@@ -73,13 +74,10 @@ def convert_tool(tool_instance: Any) -> FunctionTool:
             params_dict = json.loads(args_json) if isinstance(args_json, str) else args_json
             params = param_model(**params_dict)
             result = await tool_instance(params)
-            # Handle ToolResult-like objects (e.g., fetch_url returns objects with .output)
-            if hasattr(result, "output"):
-                return str(result.output)
-            return str(result) if result is not None else ""
+            return normalize_tool_result(result)
         except Exception as e:
-            logger.error(f"Tool {name} error: {e}", exc_info=True)
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            logger.opt(exception=True).error("Tool {} error: {}", name, e)
+            return json.dumps({"status": "error", "success": False, "error": str(e)}, ensure_ascii=False)
 
     return FunctionTool(
         name=name,

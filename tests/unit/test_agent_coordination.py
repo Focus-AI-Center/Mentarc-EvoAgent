@@ -73,6 +73,17 @@ class StoredChild:
         elif task == "fail":
             raise RuntimeError("worker unavailable")
         else:
+            yield {
+                "code": 5,
+                "content": json.dumps(
+                    {
+                        "name": "report",
+                        "status": "success",
+                        "is_error": False,
+                        "artifacts": [{"url": "https://example.com/final.pdf", "name": "final.pdf"}],
+                    }
+                ),
+            }
             yield {"code": 2, "content": "final " + "complete body " * 600 + " https://example.com/final.pdf"}
         history.append({"role": "assistant", "content": task})
         self.workspace.history_save(self.session_id, {"conversation": history})
@@ -513,13 +524,17 @@ async def test_chat_api_passes_task_identity_and_extracts_each_parallel_response
         "sessionId": "main",
         "requestId": "request-1",
         "taskId": "report-a",
-        "data": {"input": "two reports"},
+        "answerTo": {"question_id": "question-a", "agent_type": "worker", "task_id": "report-a"},
+        "data": {"input": "two reports", "files": [{"name": "rules.txt", "content": "Original rules"}]},
     }
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/chat", json=payload)
         invalid = await client.post("/chat", json=payload | {"taskId": "../other"})
     assert response.status_code == 200 and invalid.status_code == 422
     assert instances[0]["task_id"] == "report-a"
+    assert instances[0]["answer_to"]["question_id"] == "question-a"
+    assert instances[0]["original_input"] == "two reports"
+    assert instances[0]["attachments"]["files"][0]["content"] == "Original rules"
     assert extracted == [{"a": 1}, {"b": 2}]
     events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
     assert all(event["requestId"] == "request-1" for event in events)

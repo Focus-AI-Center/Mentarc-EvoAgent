@@ -101,6 +101,8 @@ transcript summarization within token budgets, bounded recent-message retention,
 exact recovery references, shared deadlines and failure-safe history replacement.
 
 Main and child agents compose the same [runtime components](docs/runtime-components.md).
+The [runtime contracts](docs/runtime-contracts.md) describe question/answer routing,
+delegation source snapshots, typed tool outcomes and measured provider usage.
 HTTP disconnection or cancellation closes the active stream and saves completed
 tool facts, partial responses and unconfirmed calls through the existing
 workspace. This requires no Redis and does not automatically retry remote work.

@@ -34,7 +34,16 @@ Legacy single-file text proposals remain supported. New proposals containing ref
 
 ## Confirmation and storage
 
-Ordinary chat and "Update memory" recognize proposals. The card previews the main document and every reference. One confirmation submits the complete bundle to `/api/skills/<user_id>/create`.
+Ordinary chat and "Update memory" recognize proposals. The card previews the main
+document and every reference. `operation="create"` (the legacy default) submits
+the confirmed bundle to `/api/skills/<user_id>/create`. A duplicate name returns
+409 instead of overwriting an existing skill.
+
+An improvement uses `operation="update"` and `update_target` equal to the existing
+skill name; `name` must remain identical. Confirmation submits the complete
+updated main text and changed references with `PUT /api/skills/<user_id>/<name>`.
+Read the original before proposing the update. This does not change the
+extraction criteria or remove user confirmation.
 
 Sub-agent proposals travel as separate SSE events with `code=12`, bypassing the 4,000-character ordinary sub-agent summary cap. The parent receives a brief report and need not repeat reference bodies. Incomplete output produces a retry notice and is not saved.
 
@@ -76,6 +85,17 @@ After history compression unloads a guide, it can be read again with its origina
 text and tool grants. See [agent coordination](agent-coordination.md).
 
 Create, update and `skill(save)` accept reference maps. Matching files are replaced; omitted existing references remain. Delete an obsolete file with `ref_del`. All supplied paths are validated before creation.
+
+Same-name `skill(save)` and API updates preserve creation/ownership information,
+source-session provenance, usage count, quality statistics and omitted metadata
+such as tool dependencies and handoff configuration. A full save or API update
+advances `version` and `updated_at`; a text `patch` preserves YAML exactly. Supplied
+editable fields replace their old values, including explicitly empty lists.
+Update proposals omit unspecified `triggers`, `required_tools` and `tags` from
+the request instead of converting them into empty lists. Explicit empty lists
+still clear their corresponding fields.
+Reference bundles are not a multi-file transaction, and this change does not
+provide concurrent session-write coordination.
 
 ### Exact patches
 

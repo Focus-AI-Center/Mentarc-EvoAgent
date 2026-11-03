@@ -48,6 +48,10 @@ If a UTF-8 file already exists in the user's workspace, register it with `memory
 
 First call `skill(action="list")`. Propose only workflows with at least two tool calls, likely reuse, clear inputs and outputs, and value beyond existing skills. Do not directly save a proposed skill.
 
+For an improvement, read the existing skill first. Set `operation="update"` and
+`update_target` to its existing name, keeping `name` identical. New proposals use
+`operation="create"`. The user confirms either operation before it is applied.
+
 ```text
 [SKILL_PROPOSAL]
 {
