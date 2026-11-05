@@ -74,7 +74,7 @@ async def _map_sdk_events(result, *, observer=None) -> AsyncGenerator[dict, None
       code 8: html_render
       code 9: todo_manager progress
       code 10: ask_user_question
-      code 12: complete sub-agent skill proposals for user confirmation
+      code 12: a staged skill proposal for user confirmation (sent by the skill tool via its event sink)
     """
     from agents.stream_events import RawResponsesStreamEvent, RunItemStreamEvent
 

@@ -1,6 +1,6 @@
 """Skill manager - CRUD operations for skills using file-based workspace."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from core.skills import Skill, skill_from_md, skill_to_md
 from utils.logger import logger
@@ -18,6 +18,50 @@ class SkillManager:
         if self._workspace is not None:
             return self._workspace
         return Workspace(user_id)
+
+    # --- previous version (one level, enough for undo) ---
+
+    @staticmethod
+    def _snapshot(ws: Workspace, name: str) -> dict | None:
+        raw = ws.skill_get(name)
+        if raw is None:
+            return None
+        return {
+            "saved_at": datetime.now(UTC).isoformat(),
+            "skill_md": raw,
+            "refs": ws.skill_refs_get(name),
+        }
+
+    def _backup(self, ws: Workspace, name: str) -> None:
+        snapshot = self._snapshot(ws, name)
+        if snapshot is not None:
+            ws.skill_prev_set(name, snapshot)
+
+    def undo_last_change(self, user_id: str, name: str) -> Skill:
+        """Restore the version saved before the last change.
+
+        The state being replaced becomes the new previous version, so an undo can
+        itself be undone. Also restores a skill that was deleted.
+        """
+        ws = self._ws(user_id)
+        previous = ws.skill_prev_get(name)
+        if not previous or not isinstance(previous.get("skill_md"), str):
+            raise LookupError(f"Skill '{name}' has no previous version")
+        current = self._snapshot(ws, name)
+        if current is not None:
+            ws.skill_prev_set(name, current)
+        else:
+            ws.skill_prev_del(name)
+        wanted = previous.get("refs") or {}
+        for filename in ws.skill_refs_get(name):
+            if filename not in wanted:
+                ws.skill_ref_del(name, filename)
+        for filename, content in wanted.items():
+            ws.skill_ref_set(name, filename, content)
+        ws.skill_set(name, previous["skill_md"])  # main document last
+        skill = skill_from_md(previous["skill_md"], fallback_name=name)
+        skill.references = dict(wanted)
+        return skill
 
     def get_user_skills(self, user_id: str) -> dict[str, Skill]:
         """Load user-defined/extracted skills from workspace."""
@@ -82,6 +126,8 @@ class SkillManager:
         skill.references = references
         skill.instructions = with_reference_links(skill.instructions, references)
         skill.is_builtin = False
+        if raw:
+            self._backup(ws, skill.name)
         for filename, content in references.items():
             ws.skill_ref_set(skill.name, filename, content)
         ws.skill_set(skill.name, skill_to_md(skill))
@@ -90,8 +136,20 @@ class SkillManager:
         return self._ws(user_id).skill_get(name) is not None
 
     def delete_user_skill(self, user_id: str, skill_name: str) -> bool:
-        """Delete a user skill."""
-        return self._ws(user_id).skill_del(skill_name)
+        """Delete a user skill, keeping its last version so the deletion can be undone."""
+        ws = self._ws(user_id)
+        self._backup(ws, skill_name)
+        return ws.skill_del(skill_name)
+
+    def patch_user_skill(
+        self, user_id: str, skill_name: str, old_string: str, new_string: str, ref_filename: str = ""
+    ) -> None:
+        """Apply one exact text edit; keep the pre-edit version only if the edit succeeds."""
+        ws = self._ws(user_id)
+        snapshot = self._snapshot(ws, skill_name)
+        ws.skill_patch(skill_name, old_string, new_string, ref_filename)
+        if snapshot is not None:
+            ws.skill_prev_set(skill_name, snapshot)
 
     def update_user_skill(self, user_id: str, skill_name: str, updates: dict) -> Skill | None:
         """Update fields of an existing user skill."""

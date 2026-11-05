@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import json
-import re
 from contextlib import aclosing
 from uuid import uuid4
 
@@ -101,49 +100,12 @@ async def stream_handoff(tool, params, skill, history):
         record["content"] = json.dumps(receipt, ensure_ascii=False)
 
 
-class ProposalFilter:
-    """Stream ordinary text while withholding split skill-proposal delimiters."""
-
-    def __init__(self):
-        self.pending = ""
-        self.inside = False
-
-    def feed(self, text):
-        self.pending += text
-        output = ""
-        while self.pending:
-            marker = "[/SKILL_PROPOSAL]" if self.inside else "[SKILL_PROPOSAL]"
-            index = self.pending.find(marker)
-            if index >= 0:
-                if not self.inside:
-                    output += self.pending[:index]
-                self.pending = self.pending[index + len(marker) :]
-                self.inside = not self.inside
-                continue
-            keep = 0
-            for length in range(1, min(len(marker), len(self.pending) + 1)):
-                if self.pending.endswith(marker[:length]):
-                    keep = length
-            ready = self.pending[:-keep] if keep else self.pending
-            if not self.inside:
-                output += ready
-            self.pending = self.pending[-keep:] if keep else ""
-            break
-        return output
-
-    def finish(self):
-        text = "" if self.inside else self.pending
-        self.pending = ""
-        return text
-
-
 async def run_delegation(runner, task, context, task_id, emit=None):
     """Keep all mutable delivery state local to one invocation."""
     codes, produced = set(), {}
     delivered_frames, preview_frames, questions = [], [], []
     tool_outcomes = []
     text_parts, failures = [], []
-    proposal_filter = ProposalFilter()
     asked = False
 
     async def deliver(event):
@@ -184,11 +146,8 @@ async def run_delegation(runner, task, context, task_id, emit=None):
         async with aclosing(runner.run_stream(task, context)) as events:
             async for event in events:
                 if event.get("code") == 2:
-                    raw = str(event.get("content", ""))
-                    text_parts.append(raw)
-                    visible = proposal_filter.feed(raw)
-                    if visible:
-                        await deliver(dict(event, content=visible))
+                    text_parts.append(str(event.get("content", "")))
+                    await deliver(event)
                 else:
                     asked = asked or event.get("code") == 10
                     if event.get("code") == 10:
@@ -204,18 +163,7 @@ async def run_delegation(runner, task, context, task_id, emit=None):
         failures.append(str(exc))
     if getattr(runner, "failure", None):
         failures.append(runner.failure)
-    remaining = proposal_filter.finish()
-    if remaining:
-        await deliver({"code": 2, "content": remaining})
-    full_text = "".join(text_parts)
-    if "[SKILL_PROPOSAL]" in full_text:
-        await deliver({"code": 12, "content": full_text})
-        if full_text.count("[SKILL_PROPOSAL]") != full_text.count("[/SKILL_PROPOSAL]"):
-            failures.append(
-                "Skill proposal output is incomplete; do not save it. Request a complete proposal."
-            )
-
-    summary = re.sub(r"\[SKILL_PROPOSAL\][\s\S]*?(?:\[/SKILL_PROPOSAL\]|$)", "", full_text).strip()
+    summary = "".join(text_parts).strip()
     delivered_text = "".join(delivered_frames) + "\n" + "\n".join(preview_frames)
     artifacts = [
         dict(artifact, delivery_status="delivered" if url in delivered_text else "produced")

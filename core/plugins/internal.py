@@ -13,16 +13,18 @@ from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 from core.agent_compat import BaseTool
 from core.delegation import TASK_ID_PATTERN, new_task_id, run_delegation, task_session_base
 from core.runtime.delegation_context import render_delegation_context
 from core.skills.manager import SkillManager
+from core.skills.proposals import ProposalError, proposal_event
+from core.skills.proposals import stage as stage_proposal
 from utils.context_assets import memory_index_notice, skill_location_context
 from utils.logger import logger
 from utils.memory_index import MEMORY_TYPES, MemoryIndexEntry, parse_memory_index
-from utils.skill_references import normalize_reference_path, normalize_references
+from utils.skill_references import normalize_reference_path
 from utils.tool_names import normalize_tool_references
 from utils.usage import current_usage
 from utils.workspace import Workspace
@@ -180,65 +182,60 @@ class UpdateUserProfileTool(BaseTool):
 
 
 class SkillParams(BaseModel):
-    action: Literal["list", "get", "get_ref", "save", "patch", "delete", "ref_set", "ref_del"] = Field(
+    action: Literal["list", "get", "get_ref", "propose"] = Field(
         description=(
             "Actions: list, get (main document), get_ref (reference body), "
-            "save (effective immediately), patch (exact text edit), delete, "
-            "ref_set (write reference), ref_del (delete reference)"
+            "propose (suggest a new skill or a change; nothing is written until the user confirms)"
         )
     )
     name: str = Field(default="", description="Skill name; optional for list and required for other actions")
     ref_filename: str = Field(
         default="",
         description=(
-            "Reference path relative to references/ (required for get_ref/ref_set/ref_del, such as rules.md). "
-            "For patch, set it to edit a reference; omit it to edit main instructions."
+            "Reference path relative to references/ (required for get_ref, such as rules.md). "
+            "For a patch proposal, set it to edit that reference; omit it to edit main instructions."
         ),
     )
-    # --- save only fields ---
-    description: str = Field(default="", description="Skill description(save required)")
-    triggers: list[str] = Field(default=[], description="Trigger phrases(save required)")
-    instructions: str = Field(default="", description="Skill execution steps(save required)")
+    # --- propose only fields ---
+    operation: Literal["create", "update", "patch"] = Field(
+        default="create",
+        description=(
+            "For propose. create: a new skill (description and instructions required). "
+            "update: change the fields you supply on an existing skill; references you supply are added or "
+            "replaced and the others are kept. patch: replace one exact fragment (old_string -> new_string)."
+        ),
+    )
+    description: str = Field(default="", description="Skill description (create; optional for update)")
+    triggers: list[str] = Field(default=[], description="Trigger phrases (create; optional for update)")
+    instructions: str = Field(
+        default="", description="Complete skill steps (create; optional for update, replaces the whole text)"
+    )
     references: dict[str, str] = Field(
         default_factory=dict,
-        description='Optional for save: mapping of reference paths to complete text, such as {"rules.md":"Detailed rules"},saved together with the main document',
+        description='Optional: mapping of reference paths to complete text, such as {"rules.md":"Detailed rules"}',
     )
-
-    @field_validator("references")
-    @classmethod
-    def validate_references(cls, value):
-        return normalize_references(value)
-
-    required_tools: list[str] = Field(default=[], description="Required tool names(save optional)")
-    tags: list[str] = Field(default=[], description="Category tags(save optional)")
-    source: str = Field(
-        default="user_defined", description="Optional source for save: user_defined or extracted"
-    )
-    # --- ref_set only fields ---
-    ref_content: str = Field(default="", description="Reference file content(ref_set required)")
-    # --- patch only fields ---
+    required_tools: list[str] = Field(default=[], description="Required tool names (optional)")
+    tags: list[str] = Field(default=[], description="Category tags (optional)")
     old_string: str | None = Field(
         default=None,
-        description="Required for patch: nonempty exact text from get/get_ref, matching exactly once in the body",
+        description="Required for a patch: nonempty exact text from get/get_ref, matching exactly once",
     )
     new_string: str | None = Field(
         default=None,
-        description="Required for patch: replacement text; an explicit empty string deletes the matched fragment",
+        description="Required for a patch: replacement text; an explicit empty string deletes the matched fragment",
     )
 
 
 class SkillTool(BaseTool):
     name: str = "skill"
     description: str = (
-        "Manage skills.\n"
+        "Read skills and propose changes to them.\n"
         "- list: List skills\n"
         "- get: Load the main document and reference list\n"
         "- get_ref: Read a reference body\n"
-        "- save: Save/Create skill(effective immediately)\n"
-        "- patch: Replace one exact fragment in main instructions or a named reference; preserve metadata\n"
-        "- delete: Delete skill\n"
-        "- ref_set: Write a reference file\n"
-        "- ref_del: Delete a reference file"
+        "- propose: Suggest a new skill (operation=create), new content for an existing one "
+        "(operation=update) or one exact text edit (operation=patch). The user sees the proposal and "
+        "decides; nothing is saved by this call, so do not describe the change as done."
     )
     param_anno = SkillParams
 
@@ -258,6 +255,8 @@ class SkillTool(BaseTool):
         self._ws = workspace or Workspace(user_id)
         self._got_skills: set = set()
         self._on_loaded = on_loaded
+        # Bound by the event stream; carries the full proposal to the user as a code 12 event.
+        self.event_sink = None
 
     def on_context_compacted(self):
         self._got_skills.clear()
@@ -270,16 +269,8 @@ class SkillTool(BaseTool):
                 return await self._action_get(params.name)
             elif params.action == "get_ref":
                 return await self._action_get_ref(params.name, params.ref_filename)
-            elif params.action == "save":
-                return self._action_save(params)
-            elif params.action == "patch":
-                return await self._action_patch(params)
-            elif params.action == "delete":
-                return self._action_delete(params.name)
-            elif params.action == "ref_set":
-                return await self._action_ref_set(params.name, params.ref_filename, params.ref_content)
-            elif params.action == "ref_del":
-                return await self._action_ref_del(params.name, params.ref_filename)
+            elif params.action == "propose":
+                return await self._action_propose(params)
             else:
                 return f"Unknown action: {params.action}"
         except Exception as e:
@@ -351,74 +342,50 @@ class SkillTool(BaseTool):
             guide += "\n\n"
         return guide + f"`skills/{name}/references/{ref_filename}`:\n\n```\n{refs[ref_filename]}\n```"
 
-    def _action_save(self, params: SkillParams) -> str:
-        if not params.name or not params.description or not params.instructions:
-            return "save requires name, description and instructions."
-        from core.skills import Skill
-
-        skill = Skill(
-            name=params.name,
-            description=params.description,
-            triggers=params.triggers,
-            instructions=params.instructions,
-            references=params.references,
-            required_tools=params.required_tools,
-            tags=params.tags,
-            source=params.source if params.source in ("user_defined", "extracted") else "user_defined",
-            extracted_from=self._session_id,
-        )
-        for key in ("source", "triggers", "required_tools", "tags"):
-            if key not in params.model_fields_set:
-                skill.model_fields_set.discard(key)
-        self._skill_manager.save_user_skill(self._user_id, skill)
-        self._got_skills.discard(params.name)
-        logger.info(f"Saved skill '{params.name}' for user {self._user_id}")
-        return f"Skill '{params.name}' saved and effective immediately."
-
-    def _action_delete(self, name: str) -> str:
-        if not name:
-            return "Provide a skill name."
-        ok = self._skill_manager.delete_user_skill(self._user_id, name)
-        return f"Skill '{name}' deleted." if ok else f"Skill '{name}' does not exist."
-
-    async def _action_patch(self, params: SkillParams) -> str:
-        if not params.name or not params.old_string or params.new_string is None:
-            return "patch requires name, nonempty old_string and explicit new_string (empty is allowed)."
+    async def _action_propose(self, params: SkillParams) -> str:
+        supplied = params.model_fields_set
+        fields = {}
+        for key in ("description", "instructions"):
+            if key in supplied and getattr(params, key):
+                fields[key] = getattr(params, key)
+        for key in ("triggers", "required_tools", "tags"):
+            if key in supplied:
+                fields[key] = list(getattr(params, key))
+        if "references" in supplied and params.references:
+            fields["references"] = params.references
         try:
-            await ws_call(
-                self._ws,
-                "skill_patch",
-                params.name,
-                params.old_string,
-                params.new_string,
-                params.ref_filename,
+            record = await asyncio.to_thread(
+                stage_proposal,
+                self._skill_manager,
+                self._user_id,
+                self._session_id,
+                operation=params.operation,
+                name=params.name,
+                fields=fields,
+                old_string=params.old_string or "",
+                new_string=params.new_string,
+                ref_filename=params.ref_filename,
             )
-        finally:
-            # A patch or stale match must not prevent re-reading current text.
-            self._got_skills.discard(params.name)
-        target = (
-            f"reference '{normalize_reference_path(params.ref_filename)}'"
-            if params.ref_filename
-            else "main instructions"
-        )
-        logger.info(f"Patched {target} for skill '{params.name}'")
-        return f"Patched {target} in skill '{params.name}'. Reload with get/get_ref before using it."
-
-    async def _action_ref_set(self, name: str, ref_filename: str, ref_content: str) -> str:
-        if not name or not ref_filename or not ref_content:
-            return "ref_set requires name, ref_filename and ref_content."
-        await ws_call(self._ws, "skill_ref_set", name, normalize_reference_path(ref_filename), ref_content)
-        logger.info(f"Set ref '{ref_filename}' for skill '{name}'")
-        return f"Wrote reference '{ref_filename}' in skill '{name}'."
-
-    async def _action_ref_del(self, name: str, ref_filename: str) -> str:
-        if not name or not ref_filename:
-            return "ref_del requires name and ref_filename."
-        ok = await ws_call(self._ws, "skill_ref_del", name, normalize_reference_path(ref_filename))
-        return (
-            f"Deleted reference '{ref_filename}'."
-            if ok
-            else f"Reference file '{ref_filename}' does not exist."
+        except ProposalError as err:
+            return f"Proposal rejected: {err}"
+        if self.event_sink is not None:
+            await self.event_sink(
+                {"code": 12, "content": json.dumps(proposal_event(record), ensure_ascii=False)}
+            )
+        logger.info(f"Proposed {record['operation']} for skill '{record['name']}' ({record['id']})")
+        return json.dumps(
+            {
+                "status": "pending_confirmation",
+                "proposal_id": record["id"],
+                "operation": record["operation"],
+                "name": record["name"],
+                "expires_at": record["expires_at"],
+                "note": (
+                    "Shown to the user as a card. It is not saved and takes effect only after the user "
+                    "confirms; do not propose the same change again."
+                ),
+            },
+            ensure_ascii=False,
         )
 
 

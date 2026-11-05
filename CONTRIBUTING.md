@@ -134,11 +134,11 @@ required_tools: [web_search]
 
 Put supporting material in `configs/skills/your-skill/references/*.md`. The agent will load references on demand via `skill(action="get_ref", ...)`.
 
-Extracted multi-file skills use JSON `SKILL_PROPOSAL` payloads with a `references`
+Extracted multi-file skills are proposed with `skill(action="propose")` and a `references`
 mapping from paths relative to `references/` to full file contents. Keep the main
 instructions concise and describe when each reference should be read. The UI
-previews all files before one confirmation saves the bundle; APIs and
-`skill(save)` accept the same mapping. See [Skill extraction](docs/skill-extraction.md).
+previews all files before one confirmation saves the bundle; agents cannot save a
+skill themselves. See [Skill extraction](docs/skill-extraction.md).
 
 Write script and asset paths relative to the skill directory. For example,
 `scripts/run.py` belongs under `configs/skills/your-skill/scripts/`; after workspace

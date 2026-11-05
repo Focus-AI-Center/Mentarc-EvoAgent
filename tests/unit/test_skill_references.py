@@ -1,4 +1,4 @@
-"""Multi-file skill proposals, persistence and lazy reference loading."""
+"""Multi-file skill proposals: the confirmation card, persistence and lazy reference loading."""
 
 import json
 import shutil
@@ -10,8 +10,8 @@ import pytest
 from fastapi import FastAPI
 
 from app.api.routers import skills as router_module
-from core.plugins.internal import SkillParams, SkillTool, SubAgentParams, SubAgentTool
-from core.skills import Skill, skill_from_md
+from core.plugins.internal import SkillParams, SkillTool
+from core.skills import Skill, proposals, skill_from_md
 from core.skills.manager import SkillManager
 from utils.storage_backend.localfs import LocalFSBackend
 from utils.workspace import Workspace
@@ -27,8 +27,8 @@ def run_frontend(script, input_data):
         pytest.skip("Node.js required for frontend proposal checks")
     html = Path("app/static/index.html").read_text()
     functions = (
-        "function parseSkillProposal"
-        + html.split("function parseSkillProposal", 1)[1].split("// ========== Scheduled Tasks", 1)[0]
+        "function skillProposalUser"
+        + html.split("function skillProposalUser", 1)[1].split("// ========== Scheduled Tasks", 1)[0]
     )
     result = subprocess.run(
         ["node", "-e", functions + "\n" + script],
@@ -40,109 +40,137 @@ def run_frontend(script, input_data):
     return json.loads(result.stdout)
 
 
-def test_frontend_preserves_multiline_references_and_old_proposals():
-    proposal = {
-        "name": "buyer-leads",
-        "description": "Screen buyer leads",
-        "triggers": ["find buyers"],
-        "instructions": "1. Confirm inputs.\n2. Read detailed rules.",
-        "references": {
-            "rules.md": "# Rules\n\nUnicode explanation\n```python\nprint('ok')\n```",
-            "examples/report.md": "# Example\n\n" + "Complete contents\n" * 1500,
-        },
-    }
-    result = run_frontend(
-        """
+FAKE_DOM = """
 const input = JSON.parse(require('fs').readFileSync(0, 'utf8'));
-const parsed = parseSkillProposal(JSON.stringify(input));
-if(skillProposalVisibleText('Suggested workflow:[SKILL_PROPOSAL]'+JSON.stringify(input)+'[/SKILL_PROPOSAL]')!=='Suggested workflow:') throw new Error('raw proposal exposed');
-if(skillProposalVisibleText('[SKILL_PROPOSAL]{')!=='') throw new Error('partial proposal exposed');
-const legacy = parseSkillProposal('name: old-skill\\ndescription: old\\ntriggers: one, two\\ninstructions: |\\n  1. Run');
-process.stdout.write(JSON.stringify({parsed, legacy}));
-""",
-        proposal,
-    )
-    assert result["parsed"]["references"] == proposal["references"]
-    assert result["parsed"]["instructions"] == proposal["instructions"]
-    assert result["legacy"]["references"] == {}
-    assert "1. Run" in result["legacy"]["instructions"]
-
-
-def test_frontend_rejects_reference_format_instead_of_silently_dropping_it():
-    result = run_frontend(
-        """
-const errors = [];
-for (const text of [
-  'name: old\\ndescription: old\\ninstructions: |\\n  run\\nreferences:\\n  rules.md: body',
-  JSON.stringify({name:'new',description:'new',instructions:'run',references:['bad']}),
-  JSON.stringify({name:'new',description:'new',instructions:'run',references:{'rules.md':''}})
-]) {
-  try { parseSkillProposal(text); errors.push(false); } catch { errors.push(true); }
-}
-process.stdout.write(JSON.stringify(errors));
-""",
-        {},
-    )
-    assert result == [True, True, True]
-
-
-@pytest.mark.asyncio
-async def test_confirmation_payload_saves_main_and_references(workspace, monkeypatch):
-    proposal = {
-        "name": "buyer-leads",
-        "description": "Screen buyer leads",
-        "triggers": ["find buyers"],
-        "instructions": "1. Confirm inputs.\n2. Screen using detailed rules.",
-        "references": {"rules.md": "# Rules\n\nDetailed rules", "examples/report.md": "Report template"},
-    }
-    payload = run_frontend(
-        """
-const input = JSON.parse(require('fs').readFileSync(0,'utf8'));
 class Element {
-  constructor(tag) { this.tag=tag; this.children=[]; this.dataset={}; this.style={}; this.handlers={}; }
+  constructor(tag) { this.tag=tag; this.children=[]; this.dataset={}; this.style={}; this.handlers={}; this.innerHTML=''; }
   appendChild(child) { child.parentElement=this; this.children.push(child); return child; }
   append(...children) { children.forEach(child=>this.appendChild(child)); }
   addEventListener(type, handler) { this.handlers[type]=handler; }
   querySelectorAll(selector) { return this.children.flatMap(child=>[
     ...(child.className===selector.slice(1)?[child]:[]), ...child.querySelectorAll(selector)]); }
-  closest() { return this.parentElement; }
-  remove() {}
+  remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(c=>c!==this); }
 }
 global.document = {createElement: tag=>new Element(tag), getElementById:()=>({value:'alice'})};
 global.showSkillToast=()=>{}; global.loadSidebarSkills=()=>{};
-let payload;
-global.fetch=async (_url, options)=>{ payload=JSON.parse(options.body); return {ok:true}; };
+const calls=[];
+global.fetch=async (url, options)=>{ calls.push({url, method:options.method, body:options.body}); return {ok:true, json:async()=>({})}; };
 const parent = new Element('div'), bubble = new Element('div'); parent.appendChild(bubble);
-const text='[SKILL_PROPOSAL]'+JSON.stringify(input)+'[/SKILL_PROPOSAL]';
-appendSkillProposals(bubble,text,'session-origin');
-appendSkillProposals(bubble,text,'session-origin');
-appendSkillProposals(bubble,'[SKILL_PROPOSAL]{','session-origin');
-if(!parent.children.some(node=>(node.textContent||'').includes('output is incomplete'))) throw new Error('missing truncation notice');
-const cards=parent.querySelectorAll('.skill-proposal-card');
-if(cards.length!==1) throw new Error('duplicate proposal cards');
-if(cards[0].children.filter(child=>child.tag==='details').length!==3) throw new Error('missing file previews');
+const button = (card, cls) => card.children.find(child=>child.className===cls);
+"""
+
+
+def create_event(**overrides):
+    event = {
+        "type": "skill_proposal",
+        "proposal_id": "a" * 32,
+        "operation": "create",
+        "name": "buyer-leads",
+        "fields": {
+            "description": "Screen buyer leads",
+            "triggers": ["find buyers"],
+            "required_tools": [],
+            "tags": [],
+            "instructions": "1. Confirm inputs.\n2. Read detailed rules.",
+        },
+        "references": {
+            "rules.md": "# Rules\n\nUnicode explanation\n```python\nprint('ok')\n```",
+            "examples/report.md": "# Example\n\n" + "Complete contents\n" * 1500,
+        },
+    }
+    return event | overrides
+
+
+def test_card_shows_every_file_and_decides_by_proposal_id_only():
+    result = run_frontend(
+        FAKE_DOM
+        + """
+appendSkillProposal(bubble, JSON.stringify(input));
+appendSkillProposal(bubble, JSON.stringify(input));
+appendSkillProposal(bubble, '{not json');
+const cards = parent.querySelectorAll('.skill-proposal-card');
+const details = cards[0].children.filter(child=>child.tag==='details');
+const titles = details.map(d=>d.children[0].textContent);
+const notice = parent.children.some(node=>(node.textContent||'').includes('could not be displayed'));
 (async()=>{
-  await cards[0].children.find(child=>child.className==='skill-confirm-btn').handlers.click();
-  process.stdout.write(JSON.stringify(payload));
+  await button(cards[0], 'skill-confirm-btn').handlers.click();
+  await button(cards[0], 'skill-skip-btn').handlers.click();
+  process.stdout.write(JSON.stringify({cards: cards.length, titles, notice, calls}));
 })().catch(error=>{process.stderr.write(String(error));process.exitCode=1;});
 """,
-        proposal,
+        create_event(),
     )
-    monkeypatch.setattr(router_module, "_get_manager", lambda: SkillManager(workspace=workspace))
+    assert result["cards"] == 1 and result["notice"]
+    assert [t.split("(")[0] for t in result["titles"]] == [
+        "SKILL.md",
+        "references/rules.md",
+        "references/examples/report.md",
+    ]
+    confirm, reject = result["calls"]
+    assert (
+        confirm["url"] == "/api/skills/alice/proposals/" + "a" * 32 + "/confirm"
+        and confirm["method"] == "POST"
+    )
+    assert "body" not in confirm  # the request carries nothing; the server applies its staged copy
+    assert reject["url"] == "/api/skills/alice/proposals/" + "a" * 32 and reject["method"] == "DELETE"
+
+
+def test_patch_card_shows_the_fragment_being_replaced():
+    result = run_frontend(
+        FAKE_DOM
+        + """
+appendSkillProposal(bubble, JSON.stringify(input));
+const card = parent.querySelectorAll('.skill-proposal-card')[0];
+const titles = card.children.filter(child=>child.tag==='details').map(d=>d.children[0].textContent.split('(')[0]);
+const bodies = card.children.filter(child=>child.tag==='details').map(d=>d.children[1].textContent);
+process.stdout.write(JSON.stringify({heading: card.children[0].textContent, titles, bodies}));
+""",
+        {
+            "type": "skill_proposal",
+            "proposal_id": "b" * 32,
+            "operation": "patch",
+            "name": "demo",
+            "ref_filename": "rules.md",
+            "old_string": "old text",
+            "new_string": "",
+        },
+    )
+    assert result["heading"] == "Edit: demo (references/rules.md)"
+    assert result["titles"] == ["Replace", "With"]
+    assert result["bodies"] == ["old text", "(delete this text)"]
+
+
+@pytest.mark.asyncio
+async def test_confirming_a_proposal_saves_main_and_references(workspace, monkeypatch):
+    manager = SkillManager(workspace=workspace)
+    tool = SkillTool(user_id="alice", skill_manager=manager, workspace=workspace, session_id="session-origin")
+    refs = {"rules.md": "# Rules\n\nDetailed rules", "examples/report.md": "Report template"}
+    result = await tool(
+        SkillParams(
+            action="propose",
+            operation="create",
+            name="buyer-leads",
+            description="Screen buyer leads",
+            triggers=["find buyers"],
+            instructions="1. Confirm inputs.\n2. Screen using detailed rules.",
+            references=refs,
+        )
+    )
+    proposal_id = json.loads(result)["proposal_id"]
+    monkeypatch.setattr(router_module, "_get_manager", lambda: manager)
     app = FastAPI()
     app.include_router(router_module.router, prefix="/api/skills")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/skills/alice/create", json=payload)
+        response = await client.post(f"/api/skills/alice/proposals/{proposal_id}/confirm")
     assert response.status_code == 200
-    loaded = SkillManager(workspace=workspace).get_all_skills("alice")["buyer-leads"]
-    assert loaded.references == proposal["references"]
-    assert loaded.source == "extracted"
-    assert loaded.extracted_from == "session-origin"
+    loaded = manager.get_all_skills("alice")["buyer-leads"]
+    assert loaded.references == refs
+    assert loaded.source == "extracted" and loaded.extracted_from == "session-origin"
     assert "references/rules.md" in loaded.instructions
     assert "references/examples/report.md" in loaded.instructions
     root = workspace._backend.root / "alice" / "skills" / "buyer-leads"
-    assert (root / "references" / "rules.md").read_text() == proposal["references"]["rules.md"]
-    assert proposal["references"]["rules.md"] not in workspace.skill_get("buyer-leads")
+    assert (root / "references" / "rules.md").read_text() == refs["rules.md"]
+    assert refs["rules.md"] not in workspace.skill_get("buyer-leads")
 
 
 @pytest.mark.asyncio
@@ -178,20 +206,19 @@ async def test_invalid_references_do_not_publish_skill(workspace, monkeypatch, r
 
 
 @pytest.mark.asyncio
-async def test_tool_save_and_get_ref_accept_canonical_and_prefixed_paths(workspace):
+async def test_get_ref_accepts_canonical_and_prefixed_paths_after_confirmation(workspace):
     manager = SkillManager(workspace=workspace)
     tool = SkillTool(user_id="alice", skill_manager=manager, workspace=workspace, session_id="origin")
     result = await tool(
         SkillParams(
-            action="save",
+            action="propose",
             name="demo",
             description="demo",
             instructions="Steps",
-            source="extracted",
             references={"references/rules.md": "Long detailed rules"},
         )
     )
-    assert "saved" in result
+    proposals.commit(manager, "alice", json.loads(result)["proposal_id"])
     assert workspace.skill_refs_get("demo") == {"rules.md": "Long detailed rules"}
     assert "Long detailed rules" in await tool(
         SkillParams(action="get_ref", name="demo", ref_filename="rules.md")
@@ -224,93 +251,3 @@ def test_updates_merge_references_and_keep_reference_paths_unchanged(workspace):
     )
     assert "scripts/update_memory.py" in raw.instructions
     assert 'memory(action="read")' in raw.instructions
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("complete", [True, False])
-async def test_sub_agent_proposal_bypasses_summary_truncation(workspace, monkeypatch, complete):
-    import core.sub_agent as sub_module
-
-    body = "[SKILL_PROPOSAL]" + json.dumps(
-        {
-            "name": "long-skill",
-            "description": "long",
-            "instructions": "Read the rules",
-            "references": {"rules.md": "Complete body" * 3000},
-        },
-        ensure_ascii=False,
-    )
-    if complete:
-        body += "[/SKILL_PROPOSAL]"
-
-    class Reviewer:
-        def __init__(self, **kwargs):
-            from types import SimpleNamespace
-
-            self.user_id = kwargs["user_id"]
-            self.session_id = kwargs["session_id"]
-            self.config = SimpleNamespace(name="session-reviewer")
-
-        async def run_stream(self, *args):
-            yield {"code": 2, "content": body[:4000]}
-            yield {"code": 2, "content": body[4000:]}
-
-    monkeypatch.setattr(sub_module, "SubAgentRunner", Reviewer)
-    tool = SubAgentTool(user_id="alice", workspace=workspace)
-    events = []
-
-    async def emit(event):
-        events.append(event)
-
-    tool.event_sink = emit
-    summary = await tool(SubAgentParams(agent_type="session-reviewer", task="Extract skill"))
-    assert [event["code"] for event in events] == [12]
-    assert events[0]["content"] == body
-    assert events[0]["source_agent"] == "session-reviewer"
-    assert len(summary) < 4000
-    assert "Complete body" not in summary
-    receipt = json.loads(summary)
-    assert receipt["status"] == ("delivered" if complete else "failed")
-    assert receipt["task_id"] == events[0]["task_id"]
-
-
-@pytest.mark.asyncio
-async def test_stream_forwards_full_proposal_event_before_tool_summary(workspace):
-    from agents import Agent
-    from agents.items import ToolCallItem, ToolCallOutputItem
-    from agents.stream_events import RunItemStreamEvent
-    from openai.types.responses import ResponseFunctionToolCall
-
-    from core.agent import _stream_sdk_events
-
-    proposal = "[SKILL_PROPOSAL]" + "Complete reference body" * 3000 + "[/SKILL_PROPOSAL]"
-    tool = SubAgentTool(user_id="alice", workspace=workspace)
-    agent = Agent(name="offline")
-
-    class Result:
-        async def stream_events(self):
-            yield RunItemStreamEvent(
-                name="tool_called",
-                item=ToolCallItem(
-                    agent=agent,
-                    raw_item=ResponseFunctionToolCall(
-                        type="function_call",
-                        call_id="review",
-                        name="sub_agent",
-                        arguments="{}",
-                    ),
-                ),
-            )
-            await tool.event_sink({"code": 12, "content": proposal, "task_id": "review"})
-            yield RunItemStreamEvent(
-                name="tool_output",
-                item=ToolCallOutputItem(
-                    agent=agent,
-                    raw_item={"type": "function_call_output", "call_id": "review", "output": "summary"},
-                    output="summary",
-                ),
-            )
-
-    events = [event async for event in _stream_sdk_events(Result(), [tool])]
-    assert [event["code"] for event in events] == [4, 12, 5]
-    assert events[1]["content"] == proposal

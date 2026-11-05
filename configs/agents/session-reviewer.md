@@ -38,27 +38,6 @@ Register an existing UTF-8 workspace file with `append(type, title, file_path, s
 
 ## Skill proposals
 
-Call `skill(action="list")` first. Propose only workflows with multiple tool calls, probable reuse, generalizable inputs and outputs, and new value. Do not mutate skills during extraction (`save`, `patch`, `delete`, `ref_set` or `ref_del`).
+Call `skill(action="list")` first, then follow the extraction rules in `SKILL_EXTRACT`: propose only workflows with multiple tool calls, probable reuse, generalizable inputs and outputs, and new value. Use `skill(action="propose", ...)` with `operation` create, update or patch; the user confirms each proposal before anything is saved, and `propose` is your only way to change skills. For an improvement, read the existing skill first.
 
-For an improvement, read the existing skill first, then propose `operation="update"`
-and `update_target` equal to its name. Keep `name` identical and include the complete
-updated instructions plus changed references. New skills use `operation="create"`.
-
-```text
-[SKILL_PROPOSAL]
-{
-  "name": "buyer-lead-screening",
-  "description": "Find potential buyers and screen them using purchasing signals",
-  "triggers": ["find buyers", "screen leads", "buyer leads"],
-  "required_tools": ["web_search", "fetch_url"],
-  "instructions": "1. Confirm the product and market.\n2. Before screening, call skill(action=\"get_ref\", name=\"buyer-lead-screening\", ref_filename=\"screening-rules.md\") to read references/screening-rules.md.\n3. Search and return a sourced lead table.",
-  "references": {
-    "screening-rules.md": "# Screening rules\n\nInclude candidates with a clear purchasing role and matching products. Mark insufficient evidence as unconfirmed."
-  }
-}
-[/SKILL_PROPOSAL]
-```
-
-Aim for 10-30 main-document lines. Beyond roughly 50 lines, or for long rules, templates or complete examples, split details by topic into references. Explain when to read each reference. Keys are relative to `references/`; provide full contents and valid JSON. Short skills may omit references. The user confirms the bundle before saving.
-
-Skip proposals if no skill qualifies. If no update is warranted, say "No updates needed for this conversation." Do not invent information or repeat lengthy tool results.
+Make no proposal if no skill qualifies. If no update is warranted, say "No updates needed for this conversation." Do not invent information or repeat lengthy tool results.

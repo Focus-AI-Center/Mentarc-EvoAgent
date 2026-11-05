@@ -27,6 +27,7 @@ import re
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import quote
 
 from configs.settings import (
     DEFAULT_PROMPTS_DIR,
@@ -398,6 +399,69 @@ class Workspace:
         self._delete(key)
         return True
 
+    # ── Staged skill proposals and previous versions ─────────────────────
+    # Both live under ``.meta`` rather than ``skills/`` so they are never listed as
+    # skills, exported as skill resources, or visible as skill directories.
+
+    @staticmethod
+    def _check_proposal_id(proposal_id: str) -> str:
+        if not re.fullmatch(r"[0-9a-f]{32}", proposal_id or ""):
+            raise ValueError(f"Invalid proposal id: {proposal_id!r}")
+        return proposal_id
+
+    def proposal_set(self, proposal_id: str, record: dict) -> None:
+        self._write_json(
+            self._key(".meta", "proposals", f"{self._check_proposal_id(proposal_id)}.json"), record
+        )
+
+    def proposal_get(self, proposal_id: str) -> dict | None:
+        try:
+            key = self._key(".meta", "proposals", f"{self._check_proposal_id(proposal_id)}.json")
+        except ValueError:
+            return None
+        data = self._read_json(key)
+        return data if isinstance(data, dict) else None
+
+    def proposal_del(self, proposal_id: str) -> bool:
+        try:
+            key = self._key(".meta", "proposals", f"{self._check_proposal_id(proposal_id)}.json")
+        except ValueError:
+            return False
+        if not self._exists(key):
+            return False
+        self._delete(key)
+        return True
+
+    def proposal_list(self) -> list[dict]:
+        prefix = self._key(".meta", "proposals") + "/"
+        records = []
+        for key in self._list(prefix):
+            tail = key[len(prefix) :]
+            if "/" in tail or not tail.endswith(".json"):
+                continue
+            data = self._read_json(key)
+            if isinstance(data, dict) and data.get("id"):
+                records.append(data)
+        return sorted(records, key=lambda r: r.get("created_at", ""))
+
+    def _skill_prev_key(self, name: str) -> str:
+        _validate_segment(name, allow_slash=True)
+        return self._key(".meta", "skill_prev", quote(name, safe="") + ".json")
+
+    def skill_prev_set(self, name: str, record: dict) -> None:
+        self._write_json(self._skill_prev_key(name), record)
+
+    def skill_prev_get(self, name: str) -> dict | None:
+        data = self._read_json(self._skill_prev_key(name))
+        return data if isinstance(data, dict) else None
+
+    def skill_prev_del(self, name: str) -> bool:
+        key = self._skill_prev_key(name)
+        if not self._exists(key):
+            return False
+        self._delete(key)
+        return True
+
     # ── Sessions ─────────────────────────────────────────────────────────
 
     def history_load(self, session_id: str) -> dict | None:
@@ -458,6 +522,8 @@ class Workspace:
                 skill_dirs.add(tail.split("/", 1)[0])
         if skill_dirs:
             self._delete(prefix)
+            # Previous versions belong to the skills that were just removed.
+            self._delete(self._key(".meta", "skill_prev") + "/")
         return len(skill_dirs)
 
     def clear_all(self) -> dict:

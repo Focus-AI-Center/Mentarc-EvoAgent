@@ -1,5 +1,6 @@
 """Intentional skill updates preserve lifecycle and confirmed proposal intent."""
 
+import json
 from datetime import datetime
 
 import httpx
@@ -8,9 +9,8 @@ from fastapi import FastAPI
 
 from app.api.routers import skills as router
 from core.plugins.internal import SkillParams, SkillTool
-from core.skills import Skill
+from core.skills import Skill, proposals
 from core.skills.manager import SkillManager
-from tests.unit.test_skill_references import run_frontend
 from utils.storage_backend.localfs import LocalFSBackend
 from utils.workspace import Workspace
 
@@ -39,12 +39,19 @@ def original(name="demo"):
 
 
 @pytest.mark.asyncio
-async def test_same_name_save_preserves_lifecycle_dependencies_and_handoff(manager):
+async def test_confirmed_update_preserves_lifecycle_dependencies_and_handoff(manager):
     manager.save_user_skill("alice", original())
     tool = SkillTool("alice", manager, workspace=manager._workspace, session_id="new-session")
-    await tool(
-        SkillParams(action="save", name="demo", description="New description", instructions="New steps")
+    result = await tool(
+        SkillParams(
+            action="propose",
+            operation="update",
+            name="demo",
+            description="New description",
+            instructions="New steps",
+        )
     )
+    proposals.commit(manager, "alice", json.loads(result)["proposal_id"])
     saved = manager.get_all_skills("alice")["demo"]
     assert saved.version == 8 and saved.usage_count == 12
     assert saved.created_at == datetime(2025, 1, 1) and saved.extracted_from == "origin"
@@ -76,39 +83,19 @@ async def test_create_rejects_duplicates_and_nested_update_preserves_metadata(ma
     assert saved.references == {"old.md": "Keep old details", "new.md": "New details"}
 
 
-def test_confirmed_update_proposal_uses_the_update_endpoint():
-    result = run_frontend(
-        """
-const proposal = parseSkillProposal(JSON.stringify({name:'parent/child', update_target:'parent/child',
-  description:'Updated', instructions:'New steps', references:{'rules.md':'New rules'}}));
-global.document={getElementById:()=>({value:'alice'})};
-global.showSkillToast=()=>{}; global.loadSidebarSkills=()=>{};
-let captured;
-global.fetch=async (url,options)=>{captured={url,method:options.method,body:JSON.parse(options.body)};return {ok:true};};
-const button={closest:()=>({innerHTML:''})};
-(async()=>{await confirmSkillProposal(button,btoa(unescape(encodeURIComponent(JSON.stringify(proposal)))));
-process.stdout.write(JSON.stringify({proposal,captured}));})().catch(e=>{process.stderr.write(String(e));process.exitCode=1;});
-""",
-        {},
+@pytest.mark.asyncio
+async def test_update_proposal_preserves_explicit_empty_lists_and_omitted_fields(manager):
+    manager.save_user_skill("alice", original())
+    tool = SkillTool("alice", manager, workspace=manager._workspace, session_id="new-session")
+    result = await tool(
+        SkillParams(action="propose", operation="update", name="demo", description="Updated", triggers=[])
     )
-    assert result["proposal"]["operation"] == "update"
-    assert result["captured"]["method"] == "PUT"
-    assert result["captured"]["url"] == "/api/skills/alice/parent%2Fchild"
-    assert result["captured"]["body"]["references"] == {"rules.md": "New rules"}
-    assert "source" not in result["captured"]["body"]
-    assert not {"triggers", "required_tools", "tags"} & result["captured"]["body"].keys()
-
-
-def test_update_proposal_preserves_explicit_empty_lists():
-    result = run_frontend(
-        """
-const proposal=parseSkillProposal(JSON.stringify({name:'demo',operation:'update',description:'Updated',
-instructions:'New steps',triggers:[],required_tools:[],tags:[]}));
-process.stdout.write(JSON.stringify(proposal));
-""",
-        {},
-    )
-    assert result["triggers"] == result["required_tools"] == result["tags"] == []
+    event = proposals.proposal_event(manager._workspace.proposal_get(json.loads(result)["proposal_id"]))
+    assert event["fields"] == {"description": "Updated", "triggers": []}
+    proposals.commit(manager, "alice", event["proposal_id"])
+    saved = manager.get_all_skills("alice")["demo"]
+    assert saved.triggers == []
+    assert saved.required_tools == ["fetch_url"] and saved.tags == ["writing"]
 
 
 @pytest.mark.asyncio

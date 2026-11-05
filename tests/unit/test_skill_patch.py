@@ -9,7 +9,7 @@ from agents.run_context import RunContextWrapper
 
 from core.agent_compat import convert_tool
 from core.plugins.internal import SkillParams, SkillTool
-from core.skills import Skill
+from core.skills import Skill, proposals
 from core.skills.manager import SkillManager
 from utils.storage_backend.localfs import LocalFSBackend
 from utils.storage_backend.minio_sdk import MinIOSDKBackend
@@ -38,26 +38,34 @@ def runtime(tmp_path):
     return workspace, tool
 
 
+def confirm(workspace, result):
+    """Apply a staged proposal the way the confirmation endpoint does."""
+    return proposals.commit(SkillManager(workspace), "alice", json.loads(result)["proposal_id"])
+
+
 @pytest.mark.asyncio
-async def test_sdk_patch_preserves_metadata_other_text_and_resources(runtime):
+async def test_sdk_patch_proposal_preserves_metadata_other_text_and_resources(runtime):
     workspace, tool = runtime
     workspace.skill_resource_set("demo", "scripts/run.py", b"print('unchanged')\n")
     before = workspace.skill_get("demo")
     refs = workspace.skill_refs_get("demo")
     sdk_tool = convert_tool(tool)
-    assert "patch" in sdk_tool.params_json_schema["properties"]["action"]["enum"]
+    assert sdk_tool.params_json_schema["properties"]["operation"]["enum"] == ["create", "update", "patch"]
     result = await sdk_tool.on_invoke_tool(
         RunContextWrapper(context=None),
         json.dumps(
             {
-                "action": "patch",
+                "action": "propose",
+                "operation": "patch",
                 "name": "demo",
                 "old_string": "2. Check evidence.",
                 "new_string": "2. Check evidence and keep source links.",
             }
         ),
     )
-    assert result.startswith("Patched main instructions")
+    assert json.loads(result)["status"] == "pending_confirmation"
+    assert workspace.skill_get("demo") == before  # nothing changes until the user confirms
+    confirm(workspace, result)
     assert workspace.skill_get("demo") == before.replace(
         "2. Check evidence.", "2. Check evidence and keep source links."
     )
@@ -74,10 +82,16 @@ async def test_reference_patch_supports_nested_paths_deletion_and_unicode(runtim
     main = workspace.skill_get("demo")
     result = await tool(
         SkillParams(
-            action="patch", name="demo", ref_filename=filename, old_string="Remove this.\n", new_string=""
+            action="propose",
+            operation="patch",
+            name="demo",
+            ref_filename=filename,
+            old_string="Remove this.\n",
+            new_string="",
         )
     )
-    assert result.startswith("Patched reference 'nested/rules.md'")
+    assert json.loads(result)["status"] == "pending_confirmation"
+    confirm(workspace, result)
     assert workspace.skill_refs_get("demo")["nested/rules.md"] == original.replace("Remove this.\n", "")
     assert workspace.skill_get("demo") == main
     assert workspace.skill_refs_get("demo")["other.md"] == "Keep me."
@@ -89,10 +103,10 @@ async def test_reference_patch_supports_nested_paths_deletion_and_unicode(runtim
     [
         ({"old_string": "absent", "new_string": "replacement"}, "was not found"),
         ({"old_string": "report", "new_string": "replacement"}, "more than once"),
-        ({"old_string": "", "new_string": "replacement"}, "requires"),
+        ({"old_string": "", "new_string": "replacement"}, "needs a nonempty"),
         ({"old_string": "report"}, "explicit new_string"),
         ({"old_string": "report", "new_string": None}, "explicit new_string"),
-        ({"new_string": "replacement"}, "requires"),
+        ({"new_string": "replacement"}, "needs a nonempty"),
         ({"old_string": "Check evidence.", "new_string": "Check evidence."}, "must differ"),
         (
             {"old_string": "description: Keep the original description", "new_string": "changed"},
@@ -100,15 +114,16 @@ async def test_reference_patch_supports_nested_paths_deletion_and_unicode(runtim
         ),
     ],
 )
-async def test_invalid_patch_never_writes(runtime, fields, reason):
+async def test_invalid_patch_is_rejected_before_anything_is_staged_or_written(runtime, fields, reason):
     workspace, tool = runtime
     workspace.skill_set("demo", workspace.skill_get("demo") + "Another report\n")
     before = workspace.skill_get("demo")
     refs = workspace.skill_refs_get("demo")
-    result = await tool(SkillParams(action="patch", name="demo", **fields))
-    assert reason in result
+    result = await tool(SkillParams(action="propose", operation="patch", name="demo", **fields))
+    assert result.startswith("Proposal rejected:") and reason in result
     assert workspace.skill_get("demo") == before
     assert workspace.skill_refs_get("demo") == refs
+    assert workspace.proposal_list() == []
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
@@ -140,11 +155,16 @@ async def test_reference_patch_rejects_unsafe_paths(runtime, filename):
     refs = workspace.skill_refs_get("demo")
     result = await tool(
         SkillParams(
-            action="patch", name="demo", ref_filename=filename, old_string="Keep me.", new_string="bad"
+            action="propose",
+            operation="patch",
+            name="demo",
+            ref_filename=filename,
+            old_string="Keep me.",
+            new_string="bad",
         )
     )
-    assert result.startswith("Operation failed:")
-    assert workspace.skill_refs_get("demo") == refs
+    assert result.startswith("Proposal rejected:")
+    assert workspace.skill_refs_get("demo") == refs and workspace.proposal_list() == []
 
 
 @pytest.mark.asyncio
@@ -153,7 +173,14 @@ async def test_missing_targets_are_not_created(runtime, name, filename):
     workspace, tool = runtime
     keys = workspace._backend.list_keys_sync("alice/")
     result = await tool(
-        SkillParams(action="patch", name=name, ref_filename=filename, old_string="old", new_string="new")
+        SkillParams(
+            action="propose",
+            operation="patch",
+            name=name,
+            ref_filename=filename,
+            old_string="old",
+            new_string="new",
+        )
     )
     assert "does not exist" in result
     assert workspace._backend.list_keys_sync("alice/") == keys
@@ -161,10 +188,20 @@ async def test_missing_targets_are_not_created(runtime, name, filename):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("filename", ["", "rules.md"])
-async def test_concurrent_edit_survives_conflicting_patch(runtime, monkeypatch, filename):
+async def test_concurrent_edit_survives_conflicting_patch_confirmation(runtime, monkeypatch, filename):
     workspace, tool = runtime
     key = f"alice/skills/demo/{'references/' + filename if filename else 'SKILL.md'}"
     backend = workspace._backend
+    result = await tool(
+        SkillParams(
+            action="propose",
+            operation="patch",
+            name="demo",
+            ref_filename=filename,
+            old_string="Keep source links." if filename else "2. Check evidence.",
+            new_string="Replacement",
+        )
+    )
     original = backend.read_text_sync(key)
     concurrent = original + "\nA concurrent update.\n"
     write = backend.write_text_sync
@@ -175,34 +212,9 @@ async def test_concurrent_edit_survives_conflicting_patch(runtime, monkeypatch, 
         return write(target, content, if_match=if_match)
 
     monkeypatch.setattr(backend, "write_text_sync", race)
-    result = await tool(
-        SkillParams(
-            action="patch",
-            name="demo",
-            ref_filename=filename,
-            old_string="Keep source links." if filename else "2. Check evidence.",
-            new_string="Replacement",
-        )
-    )
-    assert "changed while patching" in result
+    with pytest.raises(proposals.ProposalConflict, match="changed while patching"):
+        confirm(workspace, result)
     assert backend.read_text_sync(key) == concurrent
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "old_string,expected", [("2. Check evidence.", "Patched"), ("stale text", "Operation failed")]
-)
-async def test_patch_allows_reloading_after_success_or_stale_match(runtime, old_string, expected):
-    workspace, tool = runtime
-    await tool(SkillParams(action="get", name="demo"))
-    assert "demo" in tool._got_skills
-    result = await tool(
-        SkillParams(action="patch", name="demo", old_string=old_string, new_string="New step.")
-    )
-    assert result.startswith(expected)
-    assert "demo" not in tool._got_skills
-    current = await tool(SkillParams(action="get", name="demo"))
-    assert workspace.skill_get("demo") in current
 
 
 def test_minio_patch_sends_etag_with_write_and_does_not_use_sandbox(runtime, monkeypatch):

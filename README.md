@@ -125,8 +125,8 @@ execute_code(language="bash", code="python scripts/run.py",
 
 A bash read would add container lookup or startup, Docker exec, a shell and the
 s3fs filesystem path to a simple storage operation. Direct MinIO reads and writes
-avoid those execution costs, so `get_ref`, `save`, `patch` and `ref_set` are the intended
-fast path for skill documents. Warm sessions reuse their container, but an
+avoid those execution costs, so `get`, `get_ref` and the confirmation of a proposed change are the
+intended fast path for skill documents. Warm sessions reuse their container, but an
 extra exec is still unnecessary for ordinary reference access. This is an
 architectural latency benefit, not a published benchmark.
 

@@ -46,27 +46,6 @@ If a UTF-8 file already exists in the user's workspace, register it with `memory
 
 ## Skill proposals
 
-First call `skill(action="list")`. Propose only workflows with at least two tool calls, likely reuse, clear inputs and outputs, and value beyond existing skills. Do not directly save a proposed skill.
-
-For an improvement, read the existing skill first. Set `operation="update"` and
-`update_target` to its existing name, keeping `name` identical. New proposals use
-`operation="create"`. The user confirms either operation before it is applied.
-
-```text
-[SKILL_PROPOSAL]
-{
-  "name": "buyer-lead-screening",
-  "description": "Find potential buyers and screen them using purchasing signals",
-  "triggers": ["find buyers", "screen leads", "buyer leads"],
-  "required_tools": ["web_search", "fetch_url"],
-  "instructions": "1. Confirm the product and market.\n2. Before screening, read references/screening-rules.md with skill(action=\"get_ref\", name=\"buyer-lead-screening\", ref_filename=\"screening-rules.md\").\n3. Search candidates and produce a sourced lead table.",
-  "references": {
-    "screening-rules.md": "# Screening rules\n\nInclude candidates with a clear purchasing role and matching products. Mark insufficient evidence as unconfirmed."
-  }
-}
-[/SKILL_PROPOSAL]
-```
-
-Briefly explain the reusable pattern and invite additions. Short skills may omit `references` or use `{}`. Aim for 10-30 main-document lines; if the workflow exceeds roughly 50 lines or has long rules, templates or examples, split details by topic. State when to read each reference, include full contents and use valid JSON. Never mutate skills (`save`, `patch`, `delete`, `ref_set` or `ref_del`) before confirmation. If no workflow qualifies, omit the proposal block.
+Follow the extraction rules appended below (`SKILL_EXTRACT`). Propose with `skill(action="propose", ...)`; the user confirms each proposal before it is saved, and you have no other way to change skills. Briefly explain the reusable pattern in your report and say that the proposal is waiting for confirmation. If no workflow qualifies, make no proposal.
 
 Do not invent facts. Keep the final report concise.

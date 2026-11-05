@@ -30,7 +30,7 @@ On the first conversation, or when core profile fields are empty, briefly introd
 | `execute_code` | Run bash or Python inside the user's workspace |
 | `update_user_profile` | Write known profile changes directly |
 | `memory` | Read and write durable memory; register independent files |
-| `skill` | List, load, save, update and delete skills |
+| `skill` | List and load skills; propose a new skill or a change for the user to confirm |
 | `todo_manager` | Show progress for multistep tasks |
 | `ask_user_question` | Present selectable options |
 | `sub_agent` | Delegate an independent task to a configured sub-agent |

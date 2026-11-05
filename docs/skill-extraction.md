@@ -1,6 +1,6 @@
 # Skill extraction and reference files
 
-The session updater and `session-reviewer` use an LLM to identify reusable workflows. A proposal can contain a compact main document and several reference files. The user confirms the complete bundle before saving.
+The session updater and `session-reviewer` use an LLM to identify reusable workflows. Agents never write skills: the `skill` tool offers `list`, `get`, `get_ref` and `propose`. A proposal is staged on the server, shown to the user as a card with every file, and applied only when the user confirms. Extraction rules (criteria, fields, when to split into references) live in one place, [SKILL_EXTRACT](../configs/prompts/SKILL_EXTRACT.md); the session updater appends it and `session-reviewer` points to it.
 
 ## When to split
 
@@ -8,121 +8,59 @@ Keep triggers, inputs, core steps, output requirements and reference-reading con
 
 This is model guidance, not automatic truncation. Preserve reusable details. Short skills need no references. Each proposed file must include full text rather than a filename or placeholder.
 
-## Proposal format
+## Proposing a change
 
-Use valid JSON between the proposal markers; escape newlines and quotes:
+```python
+# A new skill (the default operation).
+skill(action="propose", operation="create", name="buyer-lead-screening",
+      description="Find potential buyers and screen purchasing signals",
+      triggers=["find buyers", "screen leads"], required_tools=["web_search", "fetch_url"],
+      instructions="1. Confirm the product and market.\n2. Read references/screening-rules.md.\n3. Return a sourced lead table.",
+      references={"screening-rules.md": "# Screening rules\n\nRequire a clear purchasing role."})
 
-```text
-[SKILL_PROPOSAL]
-{
-  "name": "buyer-lead-screening",
-  "description": "Find potential buyers and screen purchasing signals",
-  "triggers": ["find buyers", "screen leads", "buyer leads"],
-  "required_tools": ["web_search", "fetch_url"],
-  "instructions": "1. Confirm the product and market.\n2. Before screening, read references/screening-rules.md using skill(action=\"get_ref\", name=\"buyer-lead-screening\", ref_filename=\"screening-rules.md\").\n3. Search candidates and return a sourced lead table.",
-  "references": {
-    "screening-rules.md": "# Screening rules\n\nRequire a clear purchasing role and matching products. Mark insufficient evidence as unconfirmed.",
-    "examples/report.md": "# Report format\n\nCompany | Purchasing signal | Source | Open questions"
-  }
-}
-[/SKILL_PROPOSAL]
+# One exact fragment of the main text (or, with ref_filename, of a reference).
+skill(action="propose", operation="patch", name="buyer-lead-screening",
+      old_string="3. Return a sourced lead table.", new_string="3. Verify sources and return a lead table.")
+
+# New content for chosen fields; supplied references are added or replaced, others are kept.
+skill(action="propose", operation="update", name="buyer-lead-screening", description="...")
 ```
 
-`references` maps paths to full text. Keys are relative to the skill's `references/` directory. Nested paths work; one leading `references/` is accepted and normalized. Absolute paths, parent traversal, empty bodies and duplicate normalized paths are rejected.
+The call returns `pending_confirmation` and a `proposal_id`; it saves nothing. `references` maps paths relative to `references/` (nested paths allowed; one leading `references/` is accepted) to full text. Paths with absolute, parent or empty segments, empty bodies, and names that differ only by case or Unicode form are rejected, as are these limits: at most 20 references, 64KB each, 256KB in total, and 30KB of instructions. A rejected proposal returns the reason to the agent so it can correct and propose again. A pending proposal expires after 7 days; at most 50 can wait per user, and a newer create/update for the same skill replaces the older one.
 
-Legacy single-file text proposals remain supported. New proposals containing references must use JSON. Parsing failure is reported rather than silently dropping references.
+The text that will be saved is what the card shows: when references are supplied, the reference links that saving appends to the instructions are already in the staged text.
 
 ## Confirmation and storage
 
-Ordinary chat and "Update memory" recognize proposals. The card previews the main
-document and every reference. `operation="create"` (the legacy default) submits
-the confirmed bundle to `/api/skills/<user_id>/create`. A duplicate name returns
-409 instead of overwriting an existing skill.
+A proposal is stored under `.meta/proposals/<id>.json` in the user's workspace (not under `skills/`, so it is never listed, exported or loaded as a skill) and its full content is sent to the client as a code 12 event: `{"type": "skill_proposal", "proposal_id", "operation", "name", "fields", "references", ...}` or, for a patch, `old_string` / `new_string` / `ref_filename`. Sub-agent proposals travel the same way, so the 4,000-character cap on a sub-agent's summary does not apply. Proposals that were not decided survive a page reload through `GET /api/skills/<user_id>/proposals`.
 
-An improvement uses `operation="update"` and `update_target` equal to the existing
-skill name; `name` must remain identical. Confirmation submits the complete
-updated main text and changed references with `PUT /api/skills/<user_id>/<name>`.
-Read the original before proposing the update. This does not change the
-extraction criteria or remove user confirmation.
+- `POST /api/skills/<user_id>/proposals/<id>/confirm` applies the staged copy; the request carries no content, so what is saved is exactly what was shown. 404 means the proposal is gone or expired; 409 means the skill changed since it was proposed.
+- `DELETE /api/skills/<user_id>/proposals/<id>` discards it.
+- `create` is rejected if the name already exists. `update` records the content it was based on and is refused if the skill changed since (usage counters and timestamps do not count). A `patch` is checked against the current text at confirmation: it must still match exactly once, and the write is conditional on the stored version. After a conflict the agent should read the skill again and re-propose.
+- Confirming is safe to repeat after a partial failure: the main document is written last and an already-applied proposal is recognized.
 
-Sub-agent proposals travel as separate SSE events with `code=12`, bypassing the 4,000-character ordinary sub-agent summary cap. The parent receives a brief report and need not repeat reference bodies. Incomplete output produces a retry notice and is not saved.
+Confirmed proposals save through the same `SkillManager` paths as manual edits. A new skill records `source="extracted"` and the originating session in `extracted_from`; an update preserves creation and ownership details, usage count, quality statistics and omitted metadata such as tool dependencies and handoff configuration, and advances `version` and `updated_at`. Omitted `triggers`, `required_tools` and `tags` stay as they are; explicit empty lists clear them. Reference bundles are not a multi-file transaction.
 
-```text
-<workspace>/<user_id>/skills/buyer-lead-screening/
-├── SKILL.md
-└── references/
-    ├── screening-rules.md
-    └── examples/report.md
-```
+The manual API (`POST /api/skills/<user_id>/create`, `PUT` and `DELETE` on `/<skill_name>`) remains for edits made by the user directly.
 
-Main-document metadata does not embed reference bodies. Extracted proposals preserve `source="extracted"` and the originating session in `extracted_from`; manual creation defaults to `user_defined`. Saving adds a short reference index if the main document lacks links to supplied references.
+## Previous version and undo
 
-Do not mutate skills during extraction before confirmation (`save`, `patch`, `delete`, `ref_set` or `ref_del`). If saving is already explicitly authorized, the tool can submit both at once:
+Before a skill is replaced, patched or deleted, its current `SKILL.md` and references are copied to `.meta/skill_prev/` (one previous version per skill). `POST /api/skills/<user_id>/undo` with `{"name": ...}` restores it, including a deleted skill; the state being replaced becomes the new previous version, so an undo can be undone. A patch that fails validation or hits a conflict leaves the previous version untouched. Usage counting does not create versions.
 
-```python
-skill(action="save", name="buyer-lead-screening", description="Screen buyer leads",
-      triggers=["find buyers"], instructions="1. Confirm inputs.\n2. Read references/rules.md and screen leads.",
-      references={"rules.md": "Complete screening rules"}, source="extracted")
-```
-
-## Cloud Agent reference access
-
-`skill(get)`, `get_ref`, `save`, `patch` and `ref_set` use the API process's workspace
-storage backend. In MINIO mode they read and write objects directly through
-the MinIO SDK. Ordinary reference access does not require a sandbox container,
-Docker exec or bash. This avoids execution and filesystem overhead; use
-`execute_code` when a script or file-processing operation actually needs to run.
-See [Cloud Agent architecture and sandbox runtime](cloud-agent.md) for the
-request paths, s3fs mapping and session-container lifecycle.
-
-## Reading and updating
+## Reading
 
 `skill(action="get", name="buyer-lead-screening")` returns the main text, skill directory and reference list without loading all reference bodies. Read details with `skill(action="get_ref", name="buyer-lead-screening", ref_filename="screening-rules.md")`.
 
-If the main guide has not been loaded, a reference-first read includes it before
-the reference body. Loading a guide also grants its required tools to that agent.
-After history compression unloads a guide, it can be read again with its original
-text and tool grants. See [agent coordination](agent-coordination.md).
-
-Create, update and `skill(save)` accept reference maps. Matching files are replaced; omitted existing references remain. Delete an obsolete file with `ref_del`. All supplied paths are validated before creation.
-
-Same-name `skill(save)` and API updates preserve creation/ownership information,
-source-session provenance, usage count, quality statistics and omitted metadata
-such as tool dependencies and handoff configuration. A full save or API update
-advances `version` and `updated_at`; a text `patch` preserves YAML exactly. Supplied
-editable fields replace their old values, including explicitly empty lists.
-Update proposals omit unspecified `triggers`, `required_tools` and `tags` from
-the request instead of converting them into empty lists. Explicit empty lists
-still clear their corresponding fields.
-Reference bundles are not a multi-file transaction, and this change does not
-provide concurrent session-write coordination.
+If the main guide has not been loaded, a reference-first read includes it before the reference body. Loading a guide also grants its required tools to that agent. After history compression unloads a guide, it can be read again with its original text and tool grants. See [agent coordination](agent-coordination.md).
 
 ### Exact patches
 
-For an authorized partial update, use the same `skill` tool with `action="patch"`:
+The text rules live in [skill_patching.py](../utils/skill_patching.py); [Workspace.skill_patch](../utils/workspace.py) owns storage and conditional writes. Both the confirmation of a patch proposal and manual tooling use them.
 
-```python
-# Read the current main document, then edit one exact fragment in its body.
-skill(action="get", name="buyer-lead-screening")
-skill(action="patch", name="buyer-lead-screening",
-      old_string="3. Search candidates and return a sourced lead table.",
-      new_string="3. Search candidates, verify sources and return a sourced lead table.")
-
-# Set ref_filename to edit one existing reference instead.
-skill(action="get_ref", name="buyer-lead-screening", ref_filename="screening-rules.md")
-skill(action="patch", name="buyer-lead-screening", ref_filename="screening-rules.md",
-      old_string="Mark insufficient evidence as unconfirmed.",
-      new_string="Mark insufficient evidence as unconfirmed and list the missing evidence.")
-```
-
-- `old_string` must be nonempty and match exactly once, including whitespace and case. Missing, ambiguous (including overlapping) and unchanged replacements fail without writing. Use more surrounding text to identify one occurrence.
-- `new_string` must be supplied. An explicit empty string deletes the matched fragment; omitting it is an error.
-- Without `ref_filename`, only the Markdown instructions are editable. YAML frontmatter, metadata, unrelated body text and other files are preserved exactly. Use a full save or the update API for metadata changes.
-- With `ref_filename`, only that text reference is edited. Nested paths and one leading `references/` are supported, with the same path validation as reference reads and writes. Missing skills or files are never created by a patch.
-- The workspace reads the target and ETag together and writes with `If-Match` through the existing storage backend. A concurrent edit rejects the patch instead of being overwritten. This does not introduce a multi-file transaction or automatic retry.
-- A patch or failed match clears the tool's loaded-document marker so `get` / `get_ref` can reload current text before the next attempt or workflow execution.
-
-The text-edit rules live in [skill_patching.py](../utils/skill_patching.py); [Workspace.skill_patch](../utils/workspace.py) owns storage and conditional writes. Both main and child agents use the existing `SkillTool` dispatch. Extraction criteria and proposal confirmation remain unchanged; patching does not automatically apply extracted suggestions.
+- `old_string` must be nonempty and match exactly once, including whitespace and case. Missing, ambiguous (including overlapping) and unchanged replacements fail without writing.
+- `new_string` must be supplied. An explicit empty string deletes the matched fragment.
+- Without `ref_filename`, only the Markdown instructions are editable; YAML frontmatter, metadata, unrelated text and other files are preserved exactly (a patch does not advance `version`). With `ref_filename`, only that text reference is edited.
+- The workspace reads the target and ETag together and writes with `If-Match`, so a concurrent edit rejects the patch instead of being overwritten. There is no automatic retry.
 
 ## Scripts, assets and backup
 
@@ -130,8 +68,8 @@ Template synchronization preserves each original relative path: `scripts/run.py`
 
 The sync layout version forces existing workspaces to refresh old misplaced `references/scripts/` copies while preserving user-owned prompt files. Skill snapshots retain main text, textual references and base64-encoded auxiliary resources, excluding nested skills from their parent's resource set. Older snapshots without the additive `resources` field remain importable.
 
-Proposal `references` and `ref_set` still write text under `references/`; they do not create executable files under `scripts/`. Create scripts or binary assets through code execution when needed.
+Proposal `references` write text under `references/`; they do not create executable files under `scripts/`. Create scripts or binary assets through code execution when needed.
 
-Implementation: [extraction prompt](../configs/prompts/SKILL_EXTRACT.md), [proposal UI](../app/static/index.html), [API schema](../app/schema/skill.py), [skill manager](../core/skills/manager.py), [tools](../core/plugins/internal.py) and [Workspace](../utils/workspace.py).
+Implementation: [extraction prompt](../configs/prompts/SKILL_EXTRACT.md), [proposal staging and commit](../core/skills/proposals.py), [reference validation](../utils/skill_references.py), [skill tool](../core/plugins/internal.py), [skill manager](../core/skills/manager.py), [endpoints](../app/api/routers/skills.py), [proposal card](../app/static/index.html) and [Workspace](../utils/workspace.py).
 
-Tests: [exact patches and concurrent writes](../tests/unit/test_skill_patch.py), [proposal/reference integration](../tests/unit/test_skill_references.py) and [resource synchronization, execution and backup](../tests/unit/test_skill_resources.py).
+Tests: [staging, confirmation and undo](../tests/unit/test_skill_proposals.py), [exact patches and concurrent writes](../tests/unit/test_skill_patch.py), [references](../tests/unit/test_skill_references.py) and [resource synchronization, execution and backup](../tests/unit/test_skill_resources.py).

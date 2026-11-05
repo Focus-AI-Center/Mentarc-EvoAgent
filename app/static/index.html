@@ -2255,6 +2255,7 @@
 
     <!-- Chat Area (hidden when welcome is shown) -->
     <div class="chat hidden" id="chat"></div>
+    <div id="pendingSkillProposals"></div>
     <div class="input-area hidden" id="chatInputArea">
       <div class="input-actions">
         <button class="input-action-btn" id="updateBtn" onclick="updateSession()" title="Update profile and memory">
@@ -2609,7 +2610,7 @@ function replayDelegatedDelivery(events, rootBubble, sessionId) {
       texts.set(bubble, text);
       bubble.innerHTML = renderMarkdown(text);
     } else if (event.code === 12) {
-      appendSkillProposals(bubble, event.content, sessionId);
+      appendSkillProposal(bubble, event.content);
     } else if ([4, 5, 8, 9, 10].includes(event.code)) {
       let data;
       try { data = JSON.parse(event.content); } catch { continue; }
@@ -3559,11 +3560,11 @@ async function send() {
           rawText = accumulateTaskText(taskTexts, event);
           const text = (bubbleTexts.get(eventBubble) || '') + event.content;
           bubbleTexts.set(eventBubble, text);
-          eventBubble.innerHTML = renderMarkdown(skillProposalVisibleText(text) || 'Preparing skill proposal…');
+          eventBubble.innerHTML = renderMarkdown(text);
           scrollToBottom();
 
         } else if (event.code === 12) {
-          appendSkillProposals(eventBubble, event.content, requestSessionId);
+          appendSkillProposal(eventBubble, event.content);
         } else if (event.code === 3) {
           if (event.content === 'stream_start') {
             bubble.textContent = 'Thinking...';
@@ -3576,8 +3577,6 @@ async function send() {
               }
             }
 
-            appendSkillProposals(bubble, rawText, requestSessionId);
-            if (rawText.includes('[SKILL_PROPOSAL]')) bubble.innerHTML = renderMarkdown(skillProposalVisibleText(rawText));
             loadSessions();
             loadSidebarFiles();
           } else if (event.content.startsWith('error')) {
@@ -3598,11 +3597,6 @@ async function send() {
           try { info = JSON.parse(event.content); } catch { info = { name: '?', result: event.content }; }
           if (info.name === 'todo_manager' || info.name === 'ask_user_question') continue;
           addToolResult(eventBubble, info.id || '', info.name, info.result || '');
-          // Detect skill save success -> toast + refresh
-          if (info.name === 'skill' && typeof info.result === 'string' && info.result.includes('saved')) {
-            const nameMatch = info.result.match(/Skill\s+['"]([^'"]+)['"]\s+saved/i);
-            if (nameMatch) { showSkillToast(nameMatch[1]); loadSidebarSkills(); }
-          }
         } else if (event.code === 6) {
           // Metrics line
           let m;
@@ -3820,7 +3814,7 @@ async function updateSession() {
 
         if (event.code === 2) {
           rawText += event.content;
-          bubble.innerHTML = renderMarkdown(skillProposalVisibleText(rawText) || 'Preparing skill proposal…');
+          bubble.innerHTML = renderMarkdown(rawText);
           scrollToBottom();
         } else if (event.code === 3) {
           if (event.content === 'stream_start') {
@@ -3833,8 +3827,6 @@ async function updateSession() {
                 bubble.textContent = 'No updates needed for this conversation.';
               }
             }
-            appendSkillProposals(bubble, rawText, sid);
-            if (rawText.includes('[SKILL_PROPOSAL]')) bubble.innerHTML = renderMarkdown(skillProposalVisibleText(rawText));
 
             loadSidebarFiles();
           } else if (event.content.startsWith('error')) {
@@ -4160,6 +4152,7 @@ async function loadSidebarFiles() {
     }
   } catch(e) { /* silent */ }
   loadSidebarSkills();
+  loadPendingSkillProposals();
   loadSidebarSubAgents();
 }
 
@@ -4230,143 +4223,116 @@ function showSkillToast(name) {
   setTimeout(() => t.remove(), 3000);
 }
 
-function parseSkillProposal(text) {
-  const clean = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+// A proposal is staged on the server and arrives as a structured code 12 event. The card only
+// shows it and sends the user's decision; the content that gets saved is the staged copy.
+function skillProposalUser() { return document.getElementById('userId').value || 'test'; }
+
+function appendSkillProposal(bubble, content) {
   let proposal;
-  if (clean.startsWith('{')) {
-    proposal = JSON.parse(clean);
-  } else {
-    // Preserve the original single-file proposal format. Multi-file proposals
-    // use JSON so indented reference bodies cannot be swallowed by instructions.
-    if (/^references[ \t]*:/m.test(clean)) throw new Error('Proposals containing references must use JSON format');
-    const get = (key) => {
-      const match = clean.match(new RegExp('^' + key + ':[ \\t]*(.*)$', 'm'));
-      return match ? match[1].trim() : '';
-    };
-    const instructions = clean.match(/instructions:[ \t]*\|?\r?\n([\s\S]*?)$/);
-    proposal = {
-      name: get('name'), description: get('description'), triggers: get('triggers'),
-      required_tools: get('required_tools'), instructions: instructions ? instructions[1].trim() : '',
-    };
-  }
-  if (!proposal || typeof proposal !== 'object' || Array.isArray(proposal)) throw new Error('Invalid proposal format');
-  for (const key of ['name', 'description', 'instructions']) {
-    if (typeof proposal[key] !== 'string' || !proposal[key].trim()) throw new Error('Proposal is missing ' + key);
-  }
-  const list = (value) => {
-    if (value == null) return [];
-    if (typeof value === 'string') return value.split(',').map(s => s.trim()).filter(Boolean);
-    if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) throw new Error('Invalid proposal list field');
-    return value;
-  };
-  const references = proposal.references === undefined ? {} : proposal.references;
-  if (!references || typeof references !== 'object' || Array.isArray(references)
-      || Object.values(references).some(content => typeof content !== 'string' || !content.trim())) {
-    throw new Error('references must map file paths to nonempty text bodies');
-  }
-  const operation = proposal.operation || (proposal.update_target ? 'update' : 'create');
-  if (!['create', 'update'].includes(operation)) throw new Error('Invalid proposal operation');
-  const target = proposal.update_target || proposal.name.trim();
-  if (operation === 'update' && target !== proposal.name.trim()) throw new Error('An update must keep the existing skill name');
-  const editableList = key => operation === 'update' && proposal[key] == null
-    ? undefined : list(proposal[key]);
-  return {
-    operation, update_target: operation === 'update' ? target : null,
-    name: proposal.name.trim(), description: proposal.description.trim(),
-    triggers: editableList('triggers'), required_tools: editableList('required_tools'),
-    instructions: proposal.instructions, references, tags: editableList('tags'),
-  };
-}
-
-function skillProposalVisibleText(text) {
-  return text.replace(/\[SKILL_PROPOSAL\][\s\S]*?\[\/SKILL_PROPOSAL\]/g, '')
-    .replace(/\[SKILL_PROPOSAL\][\s\S]*$/, '').trim();
-}
-
-function appendSkillProposals(bubble, rawText, sessionId) {
-  if (rawText.lastIndexOf('[SKILL_PROPOSAL]') > rawText.lastIndexOf('[/SKILL_PROPOSAL]')) {
+  try {
+    proposal = typeof content === 'string' ? JSON.parse(content) : content;
+  } catch (error) { proposal = null; }
+  const container = bubble.parentElement;
+  if (!proposal || proposal.type !== 'skill_proposal' || !proposal.proposal_id) {
     const message = document.createElement('div');
-    message.textContent = 'Skill proposal output is incomplete and has not been saved. Ask the Agent to output the complete proposal again.';
-    bubble.parentElement.appendChild(message);
+    message.textContent = 'A skill proposal could not be displayed. Ask the Agent to propose it again.';
+    container.appendChild(message);
+    return;
   }
-  for (const match of rawText.matchAll(/\[SKILL_PROPOSAL\]([\s\S]*?)\[\/SKILL_PROPOSAL\]/g)) {
-    let proposal;
-    try {
-      proposal = parseSkillProposal(match[1]);
-    } catch (error) {
-      const message = document.createElement('div');
-      message.textContent = 'Skill proposal was not saved: ' + error.message + '. Ask the Agent to output the complete proposal again.';
-      bubble.parentElement.appendChild(message);
-      continue;
-    }
-    proposal.source = 'extracted';
-    proposal.extracted_from = sessionId || null;
-    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(proposal))));
-    if ([...bubble.parentElement.querySelectorAll('.skill-proposal-card')].some(card => card.dataset.proposal === encoded)) continue;
-    const card = document.createElement('div');
-    card.className = 'skill-proposal-card';
-    card.dataset.proposal = encoded;
-    const addText = (tag, text) => {
-      const node = document.createElement(tag);
-      node.textContent = text;
-      card.appendChild(node);
-      return node;
-    };
-    addText('strong', (proposal.operation === 'update' ? 'Update: ' : 'Create: ') + proposal.name);
-    addText('p', proposal.description);
-    const preview = (filename, content) => {
-      const details = document.createElement('details');
-      const title = document.createElement('summary');
-      title.textContent = filename + '(' + content.length + ' characters)';
-      const body = document.createElement('pre');
-      body.textContent = content;
-      body.style.whiteSpace = 'pre-wrap';
-      details.append(title, body);
-      card.appendChild(details);
-    };
-    preview('SKILL.md', proposal.instructions);
-    for (const [filename, content] of Object.entries(proposal.references)) preview('references/' + filename.replace(/^references\//, ''), content);
-    const save = addText('button', 'Confirm ' + proposal.operation + ' (includes ' + Object.keys(proposal.references).length + ' reference files)');
-    save.className = 'skill-confirm-btn';
-    save.addEventListener('click', () => confirmSkillProposal(save, encoded));
-    const skip = addText('button', 'Skip');
-    skip.className = 'skill-skip-btn';
-    skip.addEventListener('click', () => card.remove());
-    bubble.parentElement.appendChild(card);
-  }
+  renderSkillProposalCard(container, proposal);
 }
 
-async function confirmSkillProposal(btn, proposalB64) {
-  const userId = document.getElementById('userId').value || 'test';
-  const proposal = JSON.parse(decodeURIComponent(escape(atob(proposalB64))));
+function renderSkillProposalCard(container, proposal) {
+  if ([...container.querySelectorAll('.skill-proposal-card')].some(card => card.dataset.proposalId === proposal.proposal_id)) return;
+  const card = document.createElement('div');
+  card.className = 'skill-proposal-card';
+  card.dataset.proposalId = proposal.proposal_id;
+  const addText = (tag, text) => {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    card.appendChild(node);
+    return node;
+  };
+  const preview = (title, content) => {
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = title + '(' + content.length + ' characters)';
+    const body = document.createElement('pre');
+    body.textContent = content;
+    body.style.whiteSpace = 'pre-wrap';
+    details.append(summary, body);
+    card.appendChild(details);
+  };
+  const fields = proposal.fields || {};
+  const references = proposal.references || {};
+  if (proposal.operation === 'patch') {
+    const target = proposal.ref_filename ? 'references/' + proposal.ref_filename : 'SKILL.md';
+    addText('strong', 'Edit: ' + proposal.name + ' (' + target + ')');
+    preview('Replace', proposal.old_string);
+    preview('With', proposal.new_string === '' ? '(delete this text)' : proposal.new_string);
+  } else {
+    addText('strong', (proposal.operation === 'update' ? 'Update: ' : 'Create: ') + proposal.name);
+    if (fields.description) addText('p', fields.description);
+    for (const key of ['triggers', 'required_tools', 'tags']) {
+      if (Array.isArray(fields[key])) addText('div', key + ': ' + (fields[key].join(', ') || '(none)'));
+    }
+    if (fields.instructions) preview('SKILL.md', fields.instructions);
+    for (const [filename, body] of Object.entries(references)) preview('references/' + filename, body);
+  }
+  const count = Object.keys(references).length;
+  const confirm = addText('button', 'Confirm ' + proposal.operation + (count ? ' (includes ' + count + ' reference files)' : ''));
+  confirm.className = 'skill-confirm-btn';
+  confirm.addEventListener('click', () => confirmSkillProposal(confirm, proposal, card));
+  const skip = addText('button', 'Skip');
+  skip.className = 'skill-skip-btn';
+  skip.addEventListener('click', () => rejectSkillProposal(skip, proposal, card));
+  container.appendChild(card);
+}
+
+async function confirmSkillProposal(btn, proposal, card) {
   btn.disabled = true;
   btn.textContent = 'Saving...';
   try {
-    const updating = proposal.operation === 'update';
-    const endpoint = updating ? '/' + encodeURIComponent(proposal.update_target || proposal.name) : '/create';
-    const payload = updating ? {
-      description: proposal.description, triggers: proposal.triggers,
-      instructions: proposal.instructions, required_tools: proposal.required_tools,
-      tags: proposal.tags, references: proposal.references,
-    } : proposal;
-    const res = await fetch('/api/skills/' + encodeURIComponent(userId) + endpoint, {
-      method: updating ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    const res = await fetch('/api/skills/' + encodeURIComponent(skillProposalUser()) + '/proposals/' + proposal.proposal_id + '/confirm', { method: 'POST' });
     if (res.ok) {
-      btn.closest('.skill-proposal-card').innerHTML = '<div style="color:#16a34a;font-weight:500">✓ Skill saved</div>';
+      card.innerHTML = '<div style="color:#16a34a;font-weight:500">✓ Saved</div>';
       showSkillToast(proposal.name);
       loadSidebarSkills();
-    } else {
-      const error = await res.json().catch(() => ({}));
-      btn.textContent = error.detail || 'Save failed; retry';
-      btn.disabled = false;
+      return;
     }
-  } catch(e) {
+    const error = await res.json().catch(() => ({}));
+    btn.textContent = error.detail || 'Save failed';
+    // A stale or expired proposal cannot be retried; the user can only skip it.
+    btn.disabled = res.status === 404 || res.status === 409;
+  } catch (e) {
     btn.textContent = 'Save failed; retry';
     btn.disabled = false;
   }
+}
+
+async function rejectSkillProposal(btn, proposal, card) {
+  btn.disabled = true;
+  try {
+    await fetch('/api/skills/' + encodeURIComponent(skillProposalUser()) + '/proposals/' + proposal.proposal_id, { method: 'DELETE' });
+  } catch (e) { /* the server expires unanswered proposals */ }
+  card.remove();
+}
+
+// Proposals that were made but not decided (page reloaded, another session) stay available.
+async function loadPendingSkillProposals() {
+  const holder = document.getElementById('pendingSkillProposals');
+  if (!holder) return;
+  try {
+    const res = await fetch('/api/skills/' + encodeURIComponent(skillProposalUser()) + '/proposals');
+    if (!res.ok) return;
+    const data = await res.json();
+    const shown = new Set([...document.querySelectorAll('.skill-proposal-card')]
+      .filter(card => !holder.contains(card)).map(card => card.dataset.proposalId));
+    holder.innerHTML = '';
+    for (const proposal of data.proposals || []) {
+      if (!shown.has(proposal.proposal_id)) renderSkillProposalCard(holder, proposal);
+    }
+  } catch (e) { console.error('loadPendingSkillProposals error:', e); }
 }
 
 // ========== Scheduled Tasks ==========

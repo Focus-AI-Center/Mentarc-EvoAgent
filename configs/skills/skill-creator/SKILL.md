@@ -69,43 +69,38 @@ Use two to four lowercase English words separated by hyphens for the name. Write
 
 1. Understand triggers, tools, their order, inputs, outputs and variable parameters. Clarify missing requirements when needed.
 2. Identify reusable scripts, references, assets and examples.
-3. Present the main document and reference files for review. Extraction uses valid JSON inside `[SKILL_PROPOSAL]...[/SKILL_PROPOSAL]`.
-4. After user confirmation, save the main text and reference bundle together:
+3. Propose the skill with `skill(action="propose", operation="create", ...)`. The user sees the main document and every reference file on a card and confirms before anything is saved.
 
 ```python
-skill(action="save", name="write-seo-report",
+skill(action="propose", operation="create", name="write-seo-report",
       description="Search current sources and produce an SEO research report",
       triggers=["write report", "generate SEO report", "research report"],
       instructions="1. Confirm the topic.\n2. Read references/report-template.md before drafting.\n3. Search sources and write the report.",
       references={"report-template.md": "# Report\n\nInclude a title, summary, findings and source links."},
-      required_tools=["websearch", "fetchurl"], tags=["writing", "research"])
+      required_tools=["web_search", "fetch_url"], tags=["writing", "research"])
 ```
 
-Reference keys are relative to `references/`, including nested paths. Provide complete text, not placeholders. `save` takes effect immediately; confirmation must precede it.
+Reference keys are relative to `references/`, including nested paths. Provide complete text, not placeholders. Limits: at most 20 reference files, 64KB each and 256KB in total, instructions up to 30KB. Scripts and binary assets are created through code execution at their skill-relative paths; proposals carry text references only.
 
-Add or update a text reference using `skill(action="ref_set", name="write-seo-report", ref_filename="report-template.md", ref_content="Complete template text")`. This writes under `references/`; use code execution to create scripts or binary assets at their appropriate skill-relative paths.
-
-For an authorized small update, first read the current target, then patch just the changed fragment:
+To change an existing skill, read the current text first, then propose:
 
 ```python
-skill(action="patch", name="write-seo-report",
+# One exact fragment (preferred for small corrections; the rest of the document is untouched).
+skill(action="propose", operation="patch", name="write-seo-report",
       old_string="3. Search sources and write the report.",
       new_string="3. Search sources, verify citations and write the report.")
-skill(action="patch", name="write-seo-report", ref_filename="report-template.md",
+# The same, in a reference file.
+skill(action="propose", operation="patch", name="write-seo-report", ref_filename="report-template.md",
       old_string="Include a title, summary, findings and source links.",
       new_string="Include a title, summary, findings, limitations and source links.")
+# New content for chosen fields: supplied references are added or replaced, others are kept.
+skill(action="propose", operation="update", name="write-seo-report",
+      description="Search current sources, verify citations and produce an SEO research report")
 ```
 
-`old_string` must be nonempty and occur exactly once in the target body. Include surrounding text if ambiguous. `new_string` is required; an explicit empty string deletes the fragment. Main-document patches preserve YAML metadata. Each patch updates one existing file and rejects concurrent changes; reload with `get` or `get_ref` after a patch or conflict.
+`old_string` must be nonempty and occur exactly once in the target; include surrounding text if ambiguous. `new_string` is required; an explicit empty string deletes the fragment. A proposal is checked when you make it and again when the user confirms: if the skill changed in between, the confirmation is refused and you should read the skill again and propose again.
 
-For a complete rewrite or metadata changes, save the same skill name with the complete updated main text and changed references. Matching references are replaced; omitted files are retained. Delete an obsolete reference with `ref_del`. During extraction, propose changes for confirmation before using any write action, including `patch`.
-
-An update preserves creation details, usage history and omitted dependencies or
-handoff configuration; full saves advance the version. For a proposed update,
-read the original first and include `operation="update"` and `update_target`
-equal to the existing name. Keep `name` identical. The confirmation UI applies
-an update rather than trying to create the same skill again. New proposals use
-`operation="create"` and duplicate creation is rejected.
+Creation details, usage history and omitted dependencies or handoff configuration are preserved by an update. Creating a name that already exists is rejected.
 
 ## Validation
 

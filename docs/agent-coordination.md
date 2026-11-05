@@ -93,10 +93,11 @@ references that appear in visible body/preview events enter `artifact_refs`;
 ordinary source links are not classified as generated artifacts. Tool errors
 remain distinct from fatal run failures and visible delivery status.
 
-Complete skill proposals are delivered through code 12, including reference
-bodies. Proposal blocks are withheld from ordinary text streaming even when
-their delimiters span chunks. Incomplete proposals are reported as failures and
-remain unsaved. User confirmation is still required.
+Skill proposals are staged by the `skill` tool and delivered through code 12 as
+structured events with the full text of every file, so they are not subject to
+the summary cap and never appear in ordinary text streaming. A delegated agent's
+proposal reaches the user directly; the parent receives only the receipt. User
+confirmation is required before anything is saved.
 
 Child history is saved before its end marker. Parent history stores receipts in
 tool messages. Full display events are saved separately on those messages as
