@@ -52,8 +52,6 @@ Frontend (CDN, loaded at runtime):
   - DOMPurify             (Apache-2.0 OR MPL-2.0) https://github.com/cure53/DOMPurify
 
 Design attributions:
-  - The nine-section history compaction prompt in `utils/history_compressor.py`
-    is adapted from Claude Code's compaction format (Anthropic).
   - The Harness Engineering framing in README / SOUL.md references work by
     Mitchell Hashimoto, OpenAI, Paul Iusztin, and Martin Fowler / Birgitta
     Böckeler — see the "References" section at the bottom of this NOTICE.
