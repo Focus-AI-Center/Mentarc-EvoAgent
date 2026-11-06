@@ -13,7 +13,7 @@ reference does not require an extra sandbox invocation. See
 
 [Reproducibility](REPRODUCIBILITY.md) · [Citation](#citation) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
-> **⚠️ Pre-release preview.** The paper is available on [arXiv:2604.20133](https://arxiv.org/abs/2604.20133); the detailed paper-to-code mapping will be attached in the upcoming official release. Author list in `CITATION.cff` is final.
+> **📄 Paper.** The paper is on [arXiv:2604.20133](https://arxiv.org/abs/2604.20133). It is an engineering report: its experiments were run on an internal business version of EvoAgent with proprietary data, so the reported numbers are for reference only (see [REPRODUCIBILITY.md](REPRODUCIBILITY.md)).
 
 > **📦 Scope of this release.** This repository is **not the complete production codebase** behind the paper. It has been scrubbed for open-sourcing: internal
 > business logic, proprietary prompts, customer-specific skills, and integrations with closed-source internal services have been removed or replaced with
@@ -53,20 +53,18 @@ EvoAgent is an evolvable LLM-agent framework with a cloud workspace and an on-de
 - An **online execution loop** that runs user turns through a three-stage skill match, injects matched skills into the ReAct context, and compresses long histories on the fly.
 - An **offline evolution loop** that reviews completed sessions, updates the user profile and long-term memory, extracts candidate new skills, and scores skill maturity.
 
-The framework materialises the design philosophy of **Harness Engineering**: the reliability of an agent system is determined not only by the backbone model but also by the constraints, workflows, and feedback mechanisms around it. In a real-world foreign-trade deployment, integrating GPT-5.2 with EvoAgent improves a five-dimension LLM-as-Judge evaluation by ~28% on average over the same backbone model invoked directly (Section 4.1).
+The framework materialises the design philosophy of **Harness Engineering**: the reliability of an agent system is determined not only by the backbone model but also by the constraints, workflows, and feedback mechanisms around it. Concretely, the agent is organised as a harness of four components (reasoning, context engineering, tools and state), and the offline loop writes only the user's persistent state: profile, memory and skills. In a real-world foreign-trade deployment, integrating GPT-5.2 with EvoAgent improves a five-dimension LLM-as-Judge evaluation by ~28% on average over the same backbone model invoked directly with only the final query (Section 4.1; one run on proprietary data, so the figure is for reference only, see Section 4.4).
 
 ## Architecture
 
-Following Figure 1 of the paper, EvoAgent is organised as five structural layers:
+Following Figure 1 of the paper, EvoAgent is organised as a harness of four components behind an API entry (`app/api/`):
 
-| Paper layer | Code entry point |
+| Component | Code entry point |
 |---|---|
-| API entry | `app/api/` |
-| Orchestration | `core/agent.py::EvoAgent` |
-| Runtime | OpenAI Agents SDK (`Runner.run_streamed`) via `core/agent_compat.py` |
-| Shared execution | `core/runtime/`: SDK sessions, history, events and interruption persistence |
-| Tools + Session | `core/plugins/`, `utils/workspace.py` |
-| Persistence | `utils/workspace.py`, `utils/history_compressor.py` |
+| Reasoning (backbone model and ReAct loop) | `core/agent.py::EvoAgent`; OpenAI Agents SDK (`Runner.run_streamed`) via `core/agent_compat.py`; `core/runtime/` for events, usage and interruption persistence |
+| Context engineering | `core/skills/matcher.py` (three-stage skill matching); `utils/context_assets.py` and `utils/context_recovery.py` (what the context exposes and how it is recovered); `core/context_compaction.py` and `utils/history_compressor.py` (compression) |
+| Tools | `core/plugins/`, `core/mcp/`, `core/tool_search.py`; delegation in `core/delegation.py` and `core/sub_agent.py` |
+| State | Agent state (session history): `core/runtime/history.py`. User state (`USER.md`, `MEMORY.md`, skills): `utils/workspace.py`, `utils/memory_index.py`, `core/skills/manager.py`, `core/skills/proposals.py`, stored through `utils/storage_backend/` |
 
 The system runs two coordinated loops (Section 3 of the paper):
 
@@ -78,7 +76,6 @@ The system runs two coordinated loops (Section 3 of the paper):
 
 ![Offline Evolution Loop](docs/figures/offline-loop.svg)
 
-The complete mapping between paper sections (methodology, appendix pseudocode) and source files will ship with the official release alongside the paper PDF.
 
 ### Task threads and live delegation
 
@@ -409,7 +406,7 @@ Mentarc-EvoAgent/
 │   └── token_counter.py
 ├── deploy/
 │   └── sandbox-image/      # Dockerfile + entrypoint for evoagent-sandbox
-├── evaluation/             # RQ1 / RQ2 / RQ3 experiment scripts
+├── evaluation/             # response generation + LLM-judge scripts
 ├── REPRODUCIBILITY.md
 ├── CITATION.cff
 ├── SECURITY.md
@@ -417,27 +414,22 @@ Mentarc-EvoAgent/
 └── README.md
 ```
 
-## Reproducing Paper Experiments
+## Running the Evaluation Scripts
 
-See [REPRODUCIBILITY.md](REPRODUCIBILITY.md). The end-to-end commands live under `evaluation/`:
+The paper's experiments ran on an internal business version with proprietary data and cannot be reproduced from this repository ([REPRODUCIBILITY.md](REPRODUCIBILITY.md)). The two scripts under `evaluation/` run the same kind of comparison on your own data:
 
 ```bash
-# RQ1: backbone capability enhancement (baseline vs. EvoAgent, 5-dimension judge)
-python evaluation/rq1_capability/run_eval.py --mode baseline  --test-set DATA --output ...
-python evaluation/rq1_capability/run_eval.py --mode evoagent  --test-set DATA --output ...
-python evaluation/rq1_capability/judge.py    --test-set DATA --baseline ...  --treatment ...
-
-# RQ2: model-transferability study
-MODEL=gpt-4.1        python evaluation/rq2_transferability/run_model_swap.py ...
-MODEL=qwen-3.5-35b   python evaluation/rq2_transferability/run_model_swap.py ...
-
-# RQ3: capability boundary / long-session stress test
-python evaluation/rq3_boundary/long_session_stress_test.py --max-turns 420
+# Compare a bare model with the full agent on your own test cases (5-dimension LLM judge)
+python evaluation/rq1_capability/run_eval.py --test-set DATA --mode baseline_context --output ... --yes
+python evaluation/rq1_capability/run_eval.py --test-set DATA --mode evoagent         --output ... --yes
+python evaluation/rq1_capability/judge.py    --test-set DATA --baseline ... --treatment ... --judge-model ... --output ... --yes
 ```
+
+Compare backbone models by repeating the run with another `--model` and the same `--judge-model`.
 
 ## Test Dataset
 
-The 172-sample foreign-trade corpus used in RQ1/RQ2/RQ3 (distilled from 664 multi-turn production dialogues) contains proprietary business data and is not bundled with this repository. A release that reproduces the exact numbers in the paper can be made available upon reasonable request for academic collaboration.
+The 172-sample foreign-trade corpus behind the paper (distilled from 664 multi-turn production dialogues) contains proprietary business data and cannot be released, so the results in the paper are for reference only. The scripts in `evaluation/` run on any test set that follows the schema in `evaluation/README.md`.
 
 ## FAQ
 

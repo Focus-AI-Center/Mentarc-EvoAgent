@@ -1,8 +1,8 @@
 # Reproducibility Guide
 
-This document describes how to reproduce the experiments reported in the EvoAgent paper.
+This document says what can and cannot be reproduced from this repository, and how to run the evaluation scripts on your own data.
 
-> **⚠️ Pre-release preview.** The paper PDF and paper-to-code mapping referenced below will be attached in the official release. The code path structure described here is already stable.
+**What cannot be reproduced.** The numbers in the paper were measured once, on an internal business version of EvoAgent, with a proprietary corpus. This repository is a scrubbed release (see the README), and no code snapshot in it reproduces those numbers. They are for reference only.
 
 ## 1. Environment
 
@@ -22,65 +22,35 @@ COMPRESSION_MODEL=gpt-5.4-mini                 # used by history compressor
 EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-## 2. Test corpus
+## 2. Test cases
 
-RQ1/RQ2/RQ3 in the paper use 172 foreign-trade dialogue samples distilled from 664 multi-turn sessions in a deployed production environment. These samples contain proprietary business data and are **not bundled with this repository**.
+The experiments in the paper use 172 foreign-trade dialogue samples distilled from 664 multi-turn sessions in a deployed production environment. These samples contain proprietary business data that **cannot be released**, so the reported results are for reference only.
 
-- If you have access to the original corpus, place it at `evaluation/data/test_cases.jsonl` following the schema documented in `evaluation/README.md`.
-- If you want to construct your own evaluation set, create a JSONL file following the same schema; each record needs `case_id`, `user_id`, `session_id`, `query`, and optional `turns` / `intent` / `tags`.
+To run the scripts on your own data, create a JSONL file following the schema in `evaluation/README.md` (only `query` is required; `turns`, `intent`, `profile`, `memory` and `skills` are optional) and keep it, and everything generated from it, under `evaluation/data/` and `evaluation/results/` (not version-controlled).
 
-## 3. Running RQ1 (Capability Enhancement)
+## 3. Running the evaluation
 
 ```bash
-# Baseline run (pure LLM)
-python evaluation/rq1_capability/run_eval.py \
-    --test-set evaluation/data/test_cases.jsonl \
-    --mode baseline \
-    --output results/baseline.jsonl
+# Baselines: the query only (as in the paper), or with the same context as the agent
+python evaluation/rq1_capability/run_eval.py --test-set evaluation/data/test_cases.jsonl \
+    --mode baseline_context --output evaluation/results/baseline.jsonl --yes
 
 # EvoAgent run (full harness)
-python evaluation/rq1_capability/run_eval.py \
-    --test-set evaluation/data/test_cases.jsonl \
-    --mode evoagent \
-    --output results/evoagent.jsonl
+python evaluation/rq1_capability/run_eval.py --test-set evaluation/data/test_cases.jsonl \
+    --mode evoagent --output evaluation/results/evoagent.jsonl --yes
 
-# LLM-as-Judge, 5-dimension rubric
-python evaluation/rq1_capability/judge.py \
-    --test-set evaluation/data/test_cases.jsonl \
-    --baseline results/baseline.jsonl \
-    --treatment results/evoagent.jsonl \
-    --output results/rq1_scores.json
+# LLM-as-Judge, 5-dimension rubric; the judge must not be the model under test
+python evaluation/rq1_capability/judge.py --test-set evaluation/data/test_cases.jsonl \
+    --baseline evaluation/results/baseline.jsonl --treatment evaluation/results/evoagent.jsonl \
+    --judge-model <judge> --output evaluation/results/scores.json --yes
 ```
 
-## 4. Running RQ2 (Model Transferability)
+Every call costs money: use `--dry-run` for the plan and `--limit 10` for a pilot. To compare backbone models, repeat the run with another `--model` and the same `--judge-model`.
 
-```bash
-MODEL=gpt-4.1 python evaluation/rq2_transferability/run_model_swap.py \
-    --test-set evaluation/data/test_cases.jsonl \
-    --output-dir results/gpt-4.1
+The paper's results come from earlier versions of these scripts (a baseline that saw only the query, a judge that followed the model under test, and a separate long-session stress test). They are not part of the current branch; they remain in the repository history.
 
-MODEL=qwen-3.5-35b-a3b python evaluation/rq2_transferability/run_model_swap.py \
-    --test-set evaluation/data/test_cases.jsonl \
-    --output-dir results/qwen-3.5
-```
+## 4. Known caveats
 
-## 5. Running RQ3 (Boundary — Long Session)
-
-```bash
-python evaluation/rq3_boundary/long_session_stress_test.py \
-    --max-turns 420 \
-    --user-id stress_test \
-    --output results/rq3_long_session.json
-```
-
-## 6. Version pin
-
-A release corresponding to the paper will be tagged as `v1.0-paper` once the paper assets are attached. After that tag ships, check out `v1.0-paper` for bit-for-bit code parity with the published results:
-
-```bash
-git checkout v1.0-paper
-```
-
-## 7. Known caveats
-
-A paper-to-code mapping (previously `paper/PAPER_CODE_MAP.md`) will ship alongside the paper PDF in the official release. It will cover how paper sections map to source files and document implementation details that evolved after submission (e.g. history-compression strategy, sub-agent delegation options).
+- The experiments compare a bare model with the whole harness in a single run, without confidence intervals or an ablation over components (paper, Section 4.4).
+- Several mechanisms in the released code, such as user-confirmed skill proposals, were added after the experiments and are not evaluated in the paper (Section 3.4 and Appendix C).
+- The README describes how the paper's four components map to source files.

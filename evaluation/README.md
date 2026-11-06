@@ -1,75 +1,72 @@
-# Evaluation Scripts
+# Evaluation scripts
 
-Reference scaffolding for reproducing the three research questions (RQ1–RQ3) in the EvoAgent paper.
+Two scripts for comparing a bare model with the full agent on your own test cases:
 
-The test corpus (172 foreign-trade dialogue samples, distilled from 664 multi-turn sessions in a deployed production environment) contains proprietary business data and is **not shipped** with this repository. Scripts below operate on a JSONL file whose schema is described in each subdirectory; researchers can either request the original corpus from the authors or construct their own test set following the same schema.
+| Script | What it does |
+|---|---|
+| `rq1_capability/run_eval.py` | answers every test case under one condition and one model |
+| `rq1_capability/judge.py` | scores two such result files with an LLM judge (5-dimension rubric) |
 
-## Structure
+**No data is included.** The corpus behind the paper is private business data that cannot be released, so
+the numbers in the paper are for reference only. Use these scripts on your own data.
 
-```
-evaluation/
-├── rq1_capability/            RQ1: does the evolutionary mechanism add value?
-│   ├── run_eval.py             compare baseline LLM vs. LLM+EvoAgent on 5 axes
-│   └── judge.py                LLM-as-Judge scorer (5-dimension rubric)
-├── rq2_transferability/       RQ2: does EvoAgent transfer across backbone models?
-│   └── run_model_swap.py       rerun RQ1 protocol with swapped `MODEL` env var
-└── rq3_boundary/              RQ3: capability boundaries
-    └── long_session_stress_test.py  420-turn dialogue stress test
-```
+## Test cases
 
-## Input schema (`test_cases.jsonl`)
+JSONL, one object per line. Only `query` is required:
 
 ```jsonc
 {
   "case_id": "fc_001",
-  "user_id": "test_user_fc",
-  "session_id": "sess_001",
-  "turns": [
-    {"role": "user", "content": "A customer sent an inquiry..."},
-    {"role": "assistant", "content": "..."}      // reference (optional)
-  ],
-  "query": "Draft an initial reply email",              // final turn to evaluate
-  "intent": "inquiry_response",                  // for grouping analysis
-  "tags": ["email", "first_contact"]
+  "query": "Draft an initial reply email",
+  "intent": "inquiry_response",
+  "turns": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}],
+  "profile": "text of USER.md",
+  "memory": "text of MEMORY.md",
+  "skills": {"skill-name": "text of SKILL.md"}
 }
 ```
 
-## RQ1 — Capability Enhancement
+## Conditions (`--mode`)
+
+| Mode | What the model sees |
+|---|---|
+| `baseline` | the final query only (the protocol used for the paper) |
+| `baseline_context` | persona prompt, profile, memory and the dialogue so far; no tools, skills, matching or compression |
+| `evoagent` | the full agent loop, started from the same dialogue |
+
+`baseline_context` versus `evoagent` isolates what the harness adds beyond the information it is given.
+To compare models, repeat the run with another `--model` and judge with the same `--judge-model`.
+
+## Running
+
+Every call costs money: `--dry-run` prints the plan, and a real run needs `--yes`. Try `--limit 10` first.
 
 ```bash
-# Baseline: backbone LLM only
-python evaluation/rq1_capability/run_eval.py \
-  --test-set path/to/test_cases.jsonl \
-  --mode baseline \
-  --output results/baseline.jsonl
-
-# With EvoAgent
-python evaluation/rq1_capability/run_eval.py \
-  --test-set path/to/test_cases.jsonl \
-  --mode evoagent \
-  --output results/evoagent.jsonl
-
-# LLM-as-Judge scoring across 5 dimensions
-python evaluation/rq1_capability/judge.py \
-  --test-set path/to/test_cases.jsonl \
-  --baseline results/baseline.jsonl \
-  --treatment results/evoagent.jsonl \
-  --output results/scores.json
+python evaluation/rq1_capability/run_eval.py --test-set evaluation/data/test_cases.jsonl \
+    --mode baseline_context --model gpt-5.2 --output evaluation/results/baseline.jsonl --yes
+python evaluation/rq1_capability/run_eval.py --test-set evaluation/data/test_cases.jsonl \
+    --mode evoagent --model gpt-5.2 --output evaluation/results/evoagent.jsonl --yes
+python evaluation/rq1_capability/judge.py --test-set evaluation/data/test_cases.jsonl \
+    --baseline evaluation/results/baseline.jsonl --treatment evaluation/results/evoagent.jsonl \
+    --judge-model <a model that is not under test> --output evaluation/results/scores.json --yes
 ```
 
-## RQ2 — Model Transferability
+## The judge
 
-```bash
-MODEL=gpt-4.1 python evaluation/rq2_transferability/run_model_swap.py
-MODEL=qwen-3.5-35b-a3b python evaluation/rq2_transferability/run_model_swap.py
-```
+The judge must be named (`--judge-model`) and must differ from the model that produced the responses.
+Responses are shown in a seeded random order with the recent dialogue (`--both-orders` judges each pair in
+both orders). Pairs that cannot be scored are counted by reason in the output, never dropped silently.
+The output reports per-dimension means, differences with a 95% bootstrap interval over cases, and
+win/tie/loss counts.
 
-## RQ3 — Capability Boundary
+## Privacy
 
-```bash
-python evaluation/rq3_boundary/long_session_stress_test.py --max-turns 420
-```
+Keep the test set and everything under `evaluation/results/` out of version control. External plugins (web
+search, page fetch) are off by default, so case text goes only to the model API. `scores.json` has a
+`summary` (aggregates) and `per_case` (derived from your data; keep it private).
 
-## Data access
+## Not measured
 
-If you intend to reproduce the exact numbers reported in the paper, the foreign-trade dialogue corpus is available upon reasonable request (academic collaboration). See the Citation section in the repository `README.md` for contact information.
+Improvement as state accumulates over sessions, memory recall, skill-matching accuracy, cost, and agreement
+between the judge and human raters. The paper's results come from earlier versions of these scripts, where the
+baseline saw only the query and the judge followed the model under test (see Section 4.4 of the paper).
