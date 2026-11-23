@@ -2,6 +2,51 @@
 
 The session updater and `session-reviewer` use an LLM to identify reusable workflows. Agents never write skills: the `skill` tool offers `list`, `get`, `get_ref` and `propose`. A proposal is staged on the server, shown to the user as a card with every file, and applied only when the user confirms. Extraction rules (criteria, fields, when to split into references) live in one place, [SKILL_EXTRACT](../configs/prompts/SKILL_EXTRACT.md); the session updater appends it and `session-reviewer` points to it.
 
+## Flow
+
+![Offline Evolution Loop](figures/offline-loop.svg)
+
+A review starts only on demand: the user's "Update memory" button (`POST /api/agent/update-session`, an independent `SessionUpdater`) or a request in the conversation that makes the main agent delegate to `session-reviewer`. Nothing is reviewed automatically after a turn. The life of one skill proposal:
+
+```mermaid
+flowchart TD
+    S["Review starts on demand: Update memory button, or session-reviewer in chat"] --> L["skill list, then get / get_ref when improving a skill"]
+    L --> Q{"Meets the SKILL_EXTRACT criteria?"}
+    Q -->|no| N["No proposal"]
+    Q -->|yes| P["skill propose: create, update or patch"]
+    P --> V{"Valid? name, paths, size limits, unique patch match, no duplicate create"}
+    V -->|no| R["Rejected with the reason; the agent corrects and proposes again"]
+    R --> P
+    V -->|yes| G["Staged in .meta/proposals and sent to the client as code 12"]
+    G --> D{"User decision"}
+    D -->|reject| X["Discarded"]
+    D -->|"nothing for 7 days"| E["Expired"]
+    D -->|confirm| B["Check by operation:<br/>create: name available<br/>update: base content matches<br/>patch: fragment still matches exactly once"]
+    B --> C{"Checks pass?"}
+    C -->|no| K["409: the agent reads the skill again and re-proposes"]
+    C -->|yes| W["SkillManager applies the change; patches use a conditional write"]
+    W -->|concurrent patch write conflict| K
+    W -->|success| U["Available on later turns; usage_count grows when used"]
+    U -.->|undo if a previous version exists| O["POST undo restores the previous version"]
+```
+
+For updates, the base check covers editable main content and the references supplied by the proposal; usage counters and timestamps do not invalidate it. Patches read the current target and require one exact match. Earlier edits elsewhere can be preserved as long as that match remains unique; the final patch write uses `If-Match` against the version just read. Replacing or patching an existing skill keeps one previous version under `.meta/skill_prev/` for undo. A newly created skill has no previous version.
+
+## Why not extract automatically?
+
+This release starts a review when the user requests one and requires confirmation before a proposed skill change is applied. The design gives the user control over persistent instructions for these reasons:
+
+- **A reusable method needs evidence.** An ordinary request, an unadopted model suggestion or a one-off result can be mistaken for a workflow. The extraction criteria ask for a method the user provided or explicitly adopted, with inputs and outputs that generalize.
+- **Tool activity needs interpretation.** A tool-call count or the use of a built-in skill describes execution activity. The reviewer still needs to judge whether the conversation contains a reusable method and new value.
+- **Persistent edits should be visible.** A proposal card lets the user inspect each affected file before it is changed. Exact-fragment patches and a previous version for undo help recover from an accepted edit that later proves unsuitable.
+- **A saved skill affects future turns.** Skills enter the catalog the agent chooses from, and loading one grants its required tools. Confirmation makes those changes an explicit user decision.
+- **Reviews consume runtime resources.** A review adds model work. Running it after every turn also requires lifecycle handling for shutdowns, disconnects and concurrent requests. On-demand reviews let the user choose when that work is useful.
+- **Source text needs judgment.** Conversations can contain instructions from web pages, emails and other external sources. The reviewer and user should distinguish those instructions from a method intended for reuse before saving them as a skill.
+
+Confirmation adds a user action and can slow skill accumulation. These design considerations do not establish a measured error rate or a task-performance advantage over automatic extraction.
+
+An optional future background review can use the same `propose` flow and retain user confirmation. The proposal store already provides expiration and a per-user pending limit; a background trigger and evidence gate would need to be implemented separately.
+
 ## When to split
 
 Keep triggers, inputs, core steps, output requirements and reference-reading conditions in `SKILL.md`. Aim for 10-30 lines. Beyond roughly 50 lines, or for long rules, templates, examples and API details, move details into references by topic.
@@ -26,7 +71,7 @@ skill(action="propose", operation="patch", name="buyer-lead-screening",
 skill(action="propose", operation="update", name="buyer-lead-screening", description="...")
 ```
 
-The call returns `pending_confirmation` and a `proposal_id`; it saves nothing. `references` maps paths relative to `references/` (nested paths allowed; one leading `references/` is accepted) to full text. Paths with absolute, parent or empty segments, empty bodies, and names that differ only by case or Unicode form are rejected, as are these limits: at most 20 references, 64KB each, 256KB in total, and 30KB of instructions. A rejected proposal returns the reason to the agent so it can correct and propose again. A pending proposal expires after 7 days; at most 50 can wait per user, and a newer create/update for the same skill replaces the older one.
+The call returns `pending_confirmation` and a `proposal_id`; it stages the proposal without writing a skill. `references` maps paths relative to `references/` (nested paths allowed; one leading `references/` is accepted) to full text. Paths with absolute, parent or empty segments, empty bodies, and names that differ only by case or Unicode form are rejected, as are these limits: at most 20 references, 64KB each, 256KB in total, and 30KB of instructions. A rejected proposal returns the reason to the agent so it can correct and propose again. A pending proposal expires after 7 days; at most 50 can wait per user, and a newer create/update for the same skill replaces the older one.
 
 The text that will be saved is what the card shows: when references are supplied, the reference links that saving appends to the instructions are already in the staged text.
 
@@ -34,9 +79,9 @@ The text that will be saved is what the card shows: when references are supplied
 
 A proposal is stored under `.meta/proposals/<id>.json` in the user's workspace (not under `skills/`, so it is never listed, exported or loaded as a skill) and its full content is sent to the client as a code 12 event: `{"type": "skill_proposal", "proposal_id", "operation", "name", "fields", "references", ...}` or, for a patch, `old_string` / `new_string` / `ref_filename`. Sub-agent proposals travel the same way, so the 4,000-character cap on a sub-agent's summary does not apply. Proposals that were not decided survive a page reload through `GET /api/skills/<user_id>/proposals`.
 
-- `POST /api/skills/<user_id>/proposals/<id>/confirm` applies the staged copy; the request carries no content, so what is saved is exactly what was shown. 404 means the proposal is gone or expired; 409 means the skill changed since it was proposed.
+- `POST /api/skills/<user_id>/proposals/<id>/confirm` applies the staged copy; the request carries no content, so what is saved is exactly what was shown. 404 means the proposal is gone or expired; 409 means the operation conflicts with the current stored content.
 - `DELETE /api/skills/<user_id>/proposals/<id>` discards it.
-- `create` is rejected if the name already exists. `update` records the content it was based on and is refused if the skill changed since (usage counters and timestamps do not count). A `patch` is checked against the current text at confirmation: it must still match exactly once, and the write is conditional on the stored version. After a conflict the agent should read the skill again and re-propose.
+- `create` is rejected if the name already exists. `update` records the editable main content and the affected references it was based on, and checks them again at confirmation; usage counters and timestamps do not invalidate it. A `patch` is checked against the current text at confirmation: it must still match exactly once, and the write is conditional on the version just read. Unrelated edits made before that read can be preserved. After a conflict the agent should read the skill again and re-propose.
 - Confirming is safe to repeat after a partial failure: the main document is written last and an already-applied proposal is recognized.
 
 Confirmed proposals save through the same `SkillManager` paths as manual edits. A new skill records `source="extracted"` and the originating session in `extracted_from`; an update preserves creation and ownership details, usage count, quality statistics and omitted metadata such as tool dependencies and handoff configuration, and advances `version` and `updated_at`. Omitted `triggers`, `required_tools` and `tags` stay as they are; explicit empty lists clear them. Reference bundles are not a multi-file transaction.

@@ -72,7 +72,7 @@ The system runs two coordinated loops (Section 3 of the paper):
 
 ![Online Execution Loop](docs/figures/online-loop.svg)
 
-**Offline evolution loop** — users can request a session review through the memory-update button (`SessionUpdater`) or ask the main agent to delegate to `session-reviewer`. Reviews can update the user profile (`USER.md`), long-term memory (`MEMORY.md` plus registered files or typed detail files), and skill suggestions. Ordinary session completion saves history and does not automatically start a review. All writes land in the same workspace and are picked up on the next online turn.
+**Offline evolution loop** — users can request a session review through the memory-update button (`SessionUpdater`) or ask the main agent to delegate to `session-reviewer`. Reviews can update the user profile (`USER.md`) and long-term memory (`MEMORY.md` plus registered files or typed detail files) directly, and they propose skills: a proposal is staged, shown to the user as a card, and written only after the user confirms it ([skill extraction](docs/skill-extraction.md)). Ordinary session completion saves history and does not automatically start a review; this is deliberate ([why](docs/skill-extraction.md#why-not-extract-automatically)). All writes land in the same workspace and are picked up on the next online turn.
 
 ![Offline Evolution Loop](docs/figures/offline-loop.svg)
 
