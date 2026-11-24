@@ -62,6 +62,7 @@ class StoredChild:
         old = self.workspace.history_load(self.session_id) or {"conversation": []}
         history = old["conversation"]
         yield {"code": 3, "content": "stream_start"}
+        yield {"code": 4, "content": json.dumps({"id": "report", "name": "report"})}
         yield {"code": 2, "content": f"{task}: seen {len(history)} turns; "}
         if self.gate:
             await self.gate.wait()
@@ -78,6 +79,7 @@ class StoredChild:
                 "content": json.dumps(
                     {
                         "name": "report",
+                        "id": "report",
                         "status": "success",
                         "is_error": False,
                         "artifacts": [{"url": "https://example.com/final.pdf", "name": "final.pdf"}],
@@ -100,6 +102,14 @@ def child(monkeypatch):
     return StoredChild
 
 
+def task_progress(event):
+    if event.get("code") == 5:
+        data = json.loads(event["content"])
+        if data.get("name") == "worker_progress":
+            return json.loads(data["result"])
+    return {}
+
+
 @pytest.mark.asyncio
 async def test_task_history_continues_across_tool_instances_and_isolates_other_tasks(workspace, child):
     events = []
@@ -120,10 +130,10 @@ async def test_task_history_continues_across_tool_instances_and_isolates_other_t
     assert len({first["session_id"], third["session_id"], other_parent["session_id"]}) == 3
     assert "seen 1 turns" in second["summary"]
     assert "seen 0 turns" in third["summary"]
-    assert first["artifact_refs"] == ["https://example.com/final.pdf"]
-    assert all(event.get("task_id") and event.get("delivery_owner") for event in events)
-    assert not any(event["code"] in (3, 6) for event in events)
-    assert sum(len(event["content"]) for event in events if event["code"] == 2) > 24000
+    assert first["artifact_refs"] == [] and first["artifacts"][0]["delivery_status"] == "produced"
+    assert all(task_progress(event).get("task_id") for event in events)
+    assert all(event["code"] == 5 for event in events)
+    assert len(workspace.file_read(first["files"][0])) > 7000
 
 
 @pytest.mark.asyncio
@@ -139,19 +149,19 @@ async def test_missing_ids_create_new_tasks_and_invalid_ids_are_rejected(workspa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("task,status", [("ask", "waiting_user"), ("fail", "failed")])
+@pytest.mark.parametrize("task,status", [("ask", "needs_input"), ("fail", "failed")])
 async def test_receipt_distinguishes_questions_and_partial_failures(workspace, child, task, status):
     tool = SubAgentTool(user_id="alice", session_id="main", workspace=workspace)
     receipt = await tool.delegate(SubAgentParams(task=task, agent_type="worker", task_id="a"))
     assert receipt["status"] == status
     if task == "ask":
-        assert receipt["delivery_complete"]
-        assert receipt["resume_task_id"] == "a"
-        assert receipt["pending_questions"][0]["question"] == "Which format?"
+        assert not receipt["delivery_complete"]
+        assert receipt["questions_for_parent"][0]["question"] == "Which format?"
+        assert "pending_questions" not in receipt
     else:
         assert not receipt["delivery_complete"]
         assert receipt["failures"] == ["worker unavailable"]
-        assert 2 in receipt["delivered_codes"]
+        assert receipt["delivered_codes"] == [] and receipt["files"]
 
 
 class ScriptedModel(Model):
@@ -212,7 +222,7 @@ def final_message(text="done"):
 
 
 @pytest.mark.asyncio
-async def test_real_sdk_streams_parallel_children_before_completion_and_keeps_receipts(workspace, child):
+async def test_real_sdk_streams_parallel_child_progress_and_returns_files_to_parent(workspace, child):
     child.gate = asyncio.Event()
     tool = SubAgentTool(user_id="alice", session_id="main", workspace=workspace)
 
@@ -231,7 +241,7 @@ async def test_real_sdk_streams_parallel_children_before_completion_and_keeps_re
             json.loads(item["output"]) for item in input if item.get("type") == "function_call_output"
         ]
         assert {r["task_id"] for r in receipts} == {"a", "b"}
-        assert all(r["status"] == "delivered" for r in receipts)
+        assert all(r["status"] == "completed" for r in receipts)
         assert all(len(r["summary"]) < 1600 for r in receipts)
         return [final_message()]
 
@@ -244,15 +254,16 @@ async def test_real_sdk_streams_parallel_children_before_completion_and_keeps_re
             seen = set()
             async for event in stream:
                 events.append(event)
-                if event.get("task_id") and event["code"] == 2:
-                    seen.add(event["task_id"])
+                state = task_progress(event)
+                if state.get("tool_calls"):
+                    seen.add(state["task_id"])
                     if seen == {"a", "b"}:
                         assert not result.is_complete
                         child.gate.set()
         finally:
             await stream.aclose()
-    assert {event["task_id"] for event in events if event.get("task_id")} == {"a", "b"}
-    assert sum(len(e["content"]) for e in events if e["code"] == 2) > 14000
+    assert {task_progress(event)["task_id"] for event in events if task_progress(event)} == {"a", "b"}
+    assert "".join(e["content"] for e in events if e["code"] == 2) == "done"
     history = _sdk_result_to_history([], result)
     _attach_delivery_events(history, [tool])
     receipts = [msg for msg in history if msg.get("name") == "sub_agent"]
@@ -269,10 +280,9 @@ async def test_same_thread_calls_start_without_waiting_for_an_execution_lock(wor
     started = {name: asyncio.Event() for name in ("first", "second")}
 
     async def emit(frame):
-        if frame.get("code") == 2:
-            for name, event in started.items():
-                if frame.get("content", "").startswith(f"{name}: seen"):
-                    event.set()
+        state = task_progress(frame)
+        if state.get("tool_calls") and state.get("task") in started:
+            started[state["task"]].set()
 
     calls = [
         asyncio.create_task(
@@ -294,7 +304,7 @@ async def test_same_thread_calls_start_without_waiting_for_an_execution_lock(wor
         await asyncio.gather(*calls, return_exceptions=True)
 
     assert receipts[0]["session_id"] == receipts[1]["session_id"]
-    assert all(receipt["status"] == "delivered" for receipt in receipts)
+    assert all(receipt["status"] == "completed" for receipt in receipts)
     assert receipts[0]["summary"].startswith("first: seen")
     assert receipts[1]["summary"].startswith("second: seen")
 
@@ -310,6 +320,12 @@ async def test_automatic_handoff_shares_identity_delivery_and_persists_before_en
     parent._match_result = SimpleNamespace(skill=skill)
     parent.tools, parent.history = [tool], []
     parent._post_session = AsyncMock()
+
+    async def main_stream(user_input, *, append_user):
+        assert not append_user
+        yield {"code": 2, "content": "Main agent delivery"}
+
+    parent._stream_agent_events = main_stream
     async for event in parent._handle_sub_agent_handoff("report"):
         if event.get("content") == "stream_start":
             assert parent.history[-1] == {"role": "user", "content": "report"}
@@ -408,7 +424,7 @@ async def test_real_sdk_cancellation_closes_a_running_child(workspace, child, mo
     stream = _stream_sdk_events(result, [tool])
     async with asyncio.timeout(3):
         async for event in stream:
-            if event.get("task_id") == "a" and event["code"] == 2:
+            if task_progress(event).get("tool_calls"):
                 break
         await stream.aclose()
         await closed.wait()
@@ -439,9 +455,16 @@ async def test_unknown_worker_has_a_failed_receipt_and_automatic_handoff_reports
     )
     parent.tools, parent.history = [tool], []
     parent._post_session = AsyncMock()
+
+    async def main_stream(user_input, *, append_user):
+        assert not append_user
+        assert json.loads(parent.history[-1]["content"])["status"] == "failed"
+        yield {"code": 2, "content": "The delegated task failed."}
+
+    parent._stream_agent_events = main_stream
     events = [event async for event in parent._handle_sub_agent_handoff("work")]
     assert any(event["code"] == 2 and "failed" in event["content"] for event in events)
-    assert parent.history[-1]["delivery_events"]
+    assert parent.history[-1]["delivery_events"] == []
 
 
 def test_frontend_keeps_parallel_json_text_and_task_bubbles_separate():

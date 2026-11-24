@@ -133,6 +133,10 @@ def render_index(messages, receipts, reloads, budget, *, questions=None):
                     "delivered_codes",
                     "artifacts",
                     "tool_outcomes",
+                    "files",
+                    "notice",
+                    "elapsed_seconds",
+                    "files_truncated",
                 )
                 and (questions is None or key != "pending_questions")
             }

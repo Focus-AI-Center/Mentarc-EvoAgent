@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 from core.mcp.registry import MCPServerConfig, is_minio_mode
 from core.plugins.sandbox.session_docker import get_session_docker_backend
+from core.runtime.interruption import _protected
 from utils.logger import logger
 
 _PROTOCOL_VERSION = "2024-11-05"
@@ -84,6 +85,8 @@ class SandboxStdioSession:
         self._next_id = 1
         self._buffer = bytearray()
         self._closed = False
+        self._ready = asyncio.Event()
+        self._startup_error: BaseException | None = None
         self._lock = asyncio.Lock()
         self._multiplexed = True
         self._exec_id = ""
@@ -296,22 +299,38 @@ async def get_sandbox_stdio_session(
     key = _SessionKey(user_id=user_id, session_id=session_id, server_name=server.name)
     async with _sessions_lock:
         sess = _sessions.get(key)
-        if sess is not None:
+        created = sess is None or sess._closed
+        if not created:
             sess.last_used = time.monotonic()
             logger.info(
                 f"[mcp-sandbox] reusing stdio sandbox {_log_session_fields(user_id, session_id, server.name)}"
             )
-            return sess
-        sess = SandboxStdioSession(user_id=user_id, session_id=session_id, server=server)
-        _sessions[key] = sess
-    try:
-        await sess.start()
-        return sess
-    except Exception:
-        async with _sessions_lock:
-            _sessions.pop(key, None)
-        await sess.close()
-        raise
+        else:
+            sess = SandboxStdioSession(user_id=user_id, session_id=session_id, server=server)
+            _sessions[key] = sess
+    if created:
+        try:
+            await sess.start()
+        except BaseException as exc:
+            sess._startup_error = exc
+
+            async def discard():
+                async with _sessions_lock:
+                    if _sessions.get(key) is sess:
+                        _sessions.pop(key, None)
+                await sess.close()
+
+            await _protected(discard())
+            raise
+        finally:
+            sess._ready.set()
+    else:
+        await sess._ready.wait()
+        if sess._startup_error is not None:
+            raise RuntimeError("stdio MCP session initialization did not complete") from sess._startup_error
+        if sess._closed:
+            raise RuntimeError("stdio MCP session closed during initialization")
+    return sess
 
 
 async def close_all_sandbox_stdio_sessions() -> None:

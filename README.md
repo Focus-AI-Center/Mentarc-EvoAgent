@@ -17,7 +17,7 @@ reference does not require an extra sandbox invocation. See
 
 > **📦 Scope of this release.** This repository is **not the complete production codebase** behind the paper. It has been scrubbed for open-sourcing: internal
 > business logic, proprietary prompts, customer-specific skills, and integrations with closed-source internal services have been removed or replaced with
-> generic reference implementations. The released code preserves the framework's architecture (orchestrator · 3-stage skill matcher · sub-agent runner ·
+> generic reference implementations. The released code preserves the framework's architecture (orchestrator · skill router · sub-agent runner ·
 > history compressor · 4-type memory · offline evolution loop) and is sufficient to reproduce the methodology; absolute numbers from the paper's foreign-trade
 > deployment, however, require the internal corpus and skill library and cannot be reproduced from this repo alone.
 
@@ -50,42 +50,79 @@ reference does not require an extra sandbox invocation. See
 
 EvoAgent is an evolvable LLM-agent framework with a cloud workspace and an on-demand execution runtime, built around two coordinated loops:
 
-- An **online execution loop** that runs user turns through a three-stage skill match, injects matched skills into the ReAct context, and compresses long histories on the fly.
-- An **offline evolution loop** that reviews completed sessions, updates the user profile and long-term memory, extracts candidate new skills, and scores skill maturity.
+- An **online execution loop** that runs user turns through keyword/embedding pre-matching and main-model fallback, injects matched skills into the ReAct context, and compresses long histories on the fly.
+- An **offline evolution loop** that reviews completed sessions, updates the user profile and long-term memory, extracts candidate new skills, and tracks skill usage metadata.
 
 The framework materialises the design philosophy of **Harness Engineering**: the reliability of an agent system is determined not only by the backbone model but also by the constraints, workflows, and feedback mechanisms around it. Concretely, the agent is organised as a harness of four components (reasoning, context engineering, tools and state), and the offline loop writes only the user's persistent state: profile, memory and skills. In a real-world foreign-trade deployment, integrating GPT-5.2 with EvoAgent improves a five-dimension LLM-as-Judge evaluation by ~28% on average over the same backbone model invoked directly with only the final query (Section 4.1; one run on proprietary data, so the figure is for reference only, see Section 4.4).
 
+### Core mechanisms
+
+| Mechanism | Current behavior | Details |
+|---|---|---|
+| Online execution and skill routing | Load the current user/session state, try keyword and embedding pre-matching, then run the main model and tools through the SDK. Unmatched intent stays with the main model. | [Skill routing](docs/skill-routing.md) |
+| Progressive skill loading | Load original guides and references into context when needed, provide helper execution paths, and grant the guide's required tools under the current agent policy. | [Skill and tool lifecycle](docs/agent-coordination.md#skill-guides-and-tool-grants) |
+| Profile and durable memory | Keep `USER.md`, the `MEMORY.md` index, four typed detail files and registered independent memory files separate; read detail content on demand. | [Memory](docs/memory.md) |
+| Agent definitions and delegation | Resolve user Workspace `agents/` definitions before defaults. Direct sessions can address the user; delegated children receive internal-audience system instructions and return results to the main agent. Task IDs preserve separate child threads. | [Agent coordination](docs/agent-coordination.md) |
+| Background workers | Run request-local parallel tasks with independent contexts and inherited configured capabilities. Workers write files; the main agent collects, reads and verifies them before delivery. Concurrency, deadlines and cancellation are bounded. | [Workers](docs/workers.md) |
+| Tool Search and MCP | Load exact names or rank capabilities locally with BM25F. Apply per-search/cumulative schema budgets and role policies to configured plugin and MCP tools. | [Tool Search](docs/tool-search.md), [MCP](docs/mcp.md) |
+| Context compression and recovery | Summarize within history budgets, retain deterministic task/resource recovery pointers, and unload original Skill guides together with their dynamic tool grants for later reload. | [Context compression](docs/context-compression.md) |
+| History and interruption handling | Save completed tool facts and partial responses when a stream closes or is cancelled, subject to storage success. Outstanding effects remain unconfirmed; history saving does not provide a durable job queue. | [Runtime components](docs/runtime-components.md#interruption-lifecycle) |
+| On-demand review and skill changes | A requested session review can update profile/memory and prepare skill candidates. Agent-proposed create/update/patch changes require user confirmation, support reference files, and keep a previous version for undo when replacing existing content. | [Skill extraction](docs/skill-extraction.md) |
+| Cloud Workspace and execution runtime | Store durable state in LocalFS or MinIO. Ordinary text tools use the storage SDK directly; computation uses host subprocesses in LOCAL mode or a reusable session Docker container in MINIO mode. | [Cloud Agent](docs/cloud-agent.md) |
+| Streaming, questions and task progress | Deliver SSE responses, structured questions and per-task activity/file cards. A valid question ends the asking run after its current tool batch; delegated children report gaps to the main agent instead of asking users directly. | [Runtime contracts](docs/runtime-contracts.md) |
+| Usage and cost accounting | Aggregate provider-reported token usage across main and child execution without double-counting completed SDK responses; calculate cost estimates from configured model prices. | [Usage contract](docs/runtime-contracts.md#measured-usage) |
+
+The built-in UI also provides browser-local schedule triggers and heuristic skill
+maturity labels. They are not a server scheduler or automatic quality evaluation.
+See the [mechanism index](docs/README.md) for their behavior, logging defaults and
+implementation entry points. Session reviews start on request; ordinary turn
+completion saves history without automatically extracting skills.
+
 ## Architecture
+
+For the implementation guide and a map of every core mechanism to its source and documentation, start with [Core mechanisms and documentation](docs/README.md). Skill pre-matching and the actual fallback path are detailed in [Skill routing](docs/skill-routing.md).
 
 Following Figure 1 of the paper, EvoAgent is organised as a harness of four components behind an API entry (`app/api/`):
 
 | Component | Code entry point |
 |---|---|
 | Reasoning (backbone model and ReAct loop) | `core/agent.py::EvoAgent`; OpenAI Agents SDK (`Runner.run_streamed`) via `core/agent_compat.py`; `core/runtime/` for events, usage and interruption persistence |
-| Context engineering | `core/skills/matcher.py` (three-stage skill matching); `utils/context_assets.py` and `utils/context_recovery.py` (what the context exposes and how it is recovered); `core/context_compaction.py` and `utils/history_compressor.py` (compression) |
+| Context engineering | `core/skills/matcher.py` (keyword/embedding pre-match, then main-model fallback); `utils/context_assets.py` and `utils/context_recovery.py` (what the context exposes and how it is recovered); `core/context_compaction.py` and `utils/history_compressor.py` (compression) |
 | Tools | `core/plugins/`, `core/mcp/`, `core/tool_search.py`; delegation in `core/delegation.py` and `core/sub_agent.py` |
 | State | Agent state (session history): `core/runtime/history.py`. User state (`USER.md`, `MEMORY.md`, skills): `utils/workspace.py`, `utils/memory_index.py`, `core/skills/manager.py`, `core/skills/proposals.py`, stored through `utils/storage_backend/` |
 
 The system runs two coordinated loops (Section 3 of the paper):
 
-**Online execution loop** — every user turn loads profile/memory/skills from the per-user workspace, passes the query through a 3-stage skill matcher, injects matched `SKILL.md` into the ReAct context, then calls tools via the OpenAI Agents SDK. Long histories are checked for compression before execution and between SDK tool steps; complex turns may hand off to sub-agents.
+**Online execution loop** — every user turn loads profile/memory/skills from the per-user workspace, pre-matches the query through keywords and embeddings, leaves unmatched intent to the main model, injects matched `SKILL.md` into the ReAct context, then calls tools via the OpenAI Agents SDK. Long histories are checked for compression before execution and between SDK tool steps; complex turns may hand off to sub-agents.
 
 ![Online Execution Loop](docs/figures/online-loop.svg)
 
-**Offline evolution loop** — users can request a session review through the memory-update button (`SessionUpdater`) or ask the main agent to delegate to `session-reviewer`. Reviews can update the user profile (`USER.md`) and long-term memory (`MEMORY.md` plus registered files or typed detail files) directly, and they propose skills: a proposal is staged, shown to the user as a card, and written only after the user confirms it ([skill extraction](docs/skill-extraction.md)). Ordinary session completion saves history and does not automatically start a review; this is deliberate ([why](docs/skill-extraction.md#why-not-extract-automatically)). All writes land in the same workspace and are picked up on the next online turn.
+**Offline evolution loop** — users can request a session review through the memory-update button (`SessionUpdater`) or ask the main agent to delegate to `session-reviewer`. Reviews can update the user profile (`USER.md`) and long-term memory (`MEMORY.md` plus registered files or typed detail files) directly, and prepare skill changes: SessionUpdater proposes directly, while a delegated reviewer returns candidates for the main agent to propose. A proposal is staged, shown to the user as a card, and written only after the user confirms it ([skill extraction](docs/skill-extraction.md)). Ordinary session completion saves history and does not automatically start a review; this is deliberate ([why](docs/skill-extraction.md#why-not-extract-automatically)). All writes land in the same workspace and are picked up on the next online turn.
 
 ![Offline Evolution Loop](docs/figures/offline-loop.svg)
 
 
 ### Task threads and live delegation
 
+For internal parallel work, `worker` runs an independent skill-driven task and
+returns files through the user workspace. The main agent can continue other work,
+collect results with `worker_status`, and inspect them with `workspace_file` before
+delivery. LocalFS and MinIO use the same protocol; text storage operations do not
+require a sandbox. Named agent definitions are loaded from workspace `agents/`
+with built-in defaults as fallbacks. See [workers and agent definitions](docs/workers.md).
+
+Workers inherit the main agent's configured plugins and resolve the same enabled
+MCP services, with separate tool instances and discovery state. Profile
+`required_tools` adds baseline tools. The UI tracks each worker's task, tool
+activity and downloadable files in one expandable card, including restored history.
+
 Explicit delegation and skill-triggered handoff share task execution and delivery
 receipts. Reuse `sub_agent(..., task_id="report-a")` for revisions; different task
-IDs keep child histories separate. Child output streams directly to the user,
-while the parent receives delivery state, references and follow-up information.
-The chat UI separates concurrent task streams and restores delivered content
-from display metadata without adding the full transcript to the parent's model
-context.
+IDs keep child histories separate. In a delegation chain, only the main agent
+communicates with the user: child output is stored as files for the main agent to
+read, verify and present. The chat UI shows execution progress and file links.
+Direct `/api/sub-agent/{type}/chat` sessions retain user-facing replies,
+questions and skill proposals; invocation context determines the audience.
 
 Loaded skills grant their required tools to the loading agent. Context
 compression unloads skill guides and their tool grants together, allowing exact
@@ -103,6 +140,44 @@ delegation source snapshots, typed tool outcomes and measured provider usage.
 HTTP disconnection or cancellation closes the active stream and saves completed
 tool facts, partial responses and unconfirmed calls through the existing
 workspace. This requires no Redis and does not automatically retry remote work.
+
+### Tool Search and schema budgets
+
+Main agents and sub-agents use `toolsearch` to load enabled plugin and MCP tool
+definitions on demand. Search prepares schemas for the next model step; it does
+not execute the matched tools.
+
+| Capability | Behavior |
+|---|---|
+| Exact-name loading | `names=[...]` loads only the requested enabled names. Missing names return suggestions without loading substitutes. |
+| BM25F capability search | Local ranking over tool names, descriptions and parameter definitions, without an embedding or reranking-model request. |
+| Schema budgets | New search grants are limited to 24,000 characters per search and 64,000 characters cumulatively per SDK run by default. Complete definitions are loaded or explicitly refused. |
+
+```python
+# Load known tool names exactly.
+toolsearch(names=["fetch_url"])
+
+# Search by capability when tool names are unknown.
+toolsearch(query="retrieve web page content", limit=3)
+```
+
+Use either `names` or `query` in one call. Only results with `loaded=true` received
+a search grant. Both modes respect existing tool permissions, and each agent
+maintains independent loading state.
+
+The budgets are configurable through environment variables:
+
+```dotenv
+TOOLSEARCH_SEARCH_SCHEMA_CHARS=24000
+TOOLSEARCH_ACTIVE_SCHEMA_CHARS=64000
+```
+
+These are character budgets for newly search-granted schemas, rather than a
+token or total-context limit. Resident tools and direct Skill grants retain
+their own loading rules. MCP catalogs are normally discovered on the first
+search, or earlier for required/resident MCP tools. See [Tool Search](docs/tool-search.md)
+for parameters, refusal reasons and lifecycle, and [MCP setup](docs/mcp.md) for
+service configuration.
 
 ### Cloud workspace and direct reference access
 
@@ -226,12 +301,14 @@ Skill extraction supports a concise `SKILL.md` plus reference files for long
 rules, templates, and examples. Users can inspect every file in the proposal
 card and confirm the bundle once. See [Skill extraction and reference files](docs/skill-extraction.md).
 
-Tool search is enabled by default for main agents and sub-agents. Resident
-internal tools are available immediately; enabled plugin and MCP tool schemas
-are loaded after `toolsearch(query="name or capability", limit=5)` finds them.
-MCP catalogs are fetched on the first search, or earlier for explicitly required
-or resident MCP tools. See
-[Tool search](docs/tool-search.md) for configuration, lifecycle, and examples.
+Tool discovery is enabled by default. Resident internal tools, including
+`worker`, `worker_status` and `workspace_file`, are immediately available.
+See [Tool Search and schema budgets](#tool-search-and-schema-budgets) for exact
+loading, local ranking and schema limits.
+
+The default worker profile declares `execute_code` even when the main agent's
+`DEFAULT_PLUGINS` is web-only. Set `WORKER_ENABLED=false` to remove worker dispatch
+and collection tools when internal execution is unwanted.
 
 ```bash
 git clone https://github.com/Focus-AI-Center/Mentarc-EvoAgent
@@ -383,9 +460,13 @@ Mentarc-EvoAgent/
 ├── core/
 │   ├── agent.py            # EvoAgent orchestrator (Section 3.3)
 │   ├── agent_compat.py     # BaseTool -> OpenAI SDK FunctionTool adapter
-│   ├── sub_agent.py        # Sub-agent runner (Appendix A Phase 2.5)
+│   ├── agent_registry.py   # Workspace-first agent profile catalog
+│   ├── sub_agent.py        # Shared interactive child and worker executor
+│   ├── runtime/           # SDK execution, worker lifecycle and tool policies
 │   ├── plugins/
 │   │   ├── execute_code.py # Backend dispatcher (validation + sandbox.run)
+│   │   ├── workers.py      # Worker dispatch and result collection tools
+│   │   ├── workspace_files.py # Direct workspace text artifact access
 │   │   └── sandbox/        # Pluggable sandbox backends
 │   │       ├── local.py    # LocalSubprocessBackend (LOCAL mode)
 │   │       ├── session_docker.py # SessionDockerBackend (MINIO mode)
@@ -394,7 +475,7 @@ Mentarc-EvoAgent/
 ├── configs/
 │   ├── prompts/            # SOUL.md / USER.md / MEMORY.md templates
 │   ├── skills/skill-creator# Built-in meta-skill for authoring new skills
-│   └── agents/             # (Empty) drop-in sub-agent configs
+│   └── agents/             # Default session-reviewer and worker profiles
 ├── utils/
 │   ├── workspace.py        # Per-user persistence (routes to backend below)
 │   ├── context_assets.py   # Memory index limits and skill directory guidance

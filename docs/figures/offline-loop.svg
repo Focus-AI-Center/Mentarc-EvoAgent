@@ -36,9 +36,9 @@
   <text x="185" y="226" text-anchor="middle" fill="#3a5b8a" font-size="11">reads history · profile · recent sessions</text>
 
   <rect x="670" y="165" width="290" height="72" rx="10" fill="#dbe5f5" stroke="#2b5daf" stroke-width="2"/>
-  <text x="815" y="190" text-anchor="middle" font-weight="bold" fill="#1a365d">session-reviewer (sub-agent)</text>
+  <text x="815" y="190" text-anchor="middle" font-weight="bold" fill="#1a365d">session-reviewer → main agent</text>
   <text x="815" y="210" text-anchor="middle" fill="#3a5b8a" font-size="11">configs/agents/session-reviewer.md</text>
-  <text x="815" y="226" text-anchor="middle" fill="#3a5b8a" font-size="11">reads the parent history on demand</text>
+  <text x="815" y="226" text-anchor="middle" fill="#3a5b8a" font-size="11">reviewer prepares; main agent proposes</text>
 
   <text x="500" y="196" text-anchor="middle" fill="#3a5b8a" font-size="12">both follow the extraction rules in</text>
   <text x="500" y="213" text-anchor="middle" fill="#3a5b8a" font-size="12" font-weight="bold">SKILL_EXTRACT.md</text>
@@ -53,7 +53,7 @@
   <line x1="185" y1="262" x2="185" y2="292" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
   <line x1="500" y1="262" x2="500" y2="292" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
   <line x1="815" y1="262" x2="815" y2="292" stroke="#5a6b7f" stroke-width="1.5" marker-end="url(#req2)"/>
-  <text x="500" y="256" text-anchor="middle" fill="#5a6b7f" font-size="11">tool calls</text>
+  <text x="500" y="256" text-anchor="middle" fill="#5a6b7f" font-size="11">authorized tools; skill proposals via main agent</text>
 
   <!-- Row 3: what the reviewer can do -->
   <rect x="40" y="295" width="290" height="96" rx="10" fill="#fdf6e3" stroke="#b58900" stroke-width="1.5"/>

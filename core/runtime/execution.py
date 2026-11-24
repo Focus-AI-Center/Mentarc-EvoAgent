@@ -193,14 +193,21 @@ class SDKRunSession:
             self.interrupted = True
             raise
         finally:
-            record_sdk_usage(
-                self.usage_collector,
-                self.result,
-                run_id=self.run_id,
-                model=self.model,
-                category=self.usage_category,
-                response_models=self.response_models,
-            )
+            self.close()
+
+    def close(self):
+        """Also stop a run whose event generator was never entered."""
+        if self.result is not None and not getattr(self.result, "is_complete", False):
+            self.interrupted = True
+            self.result.cancel()
+        record_sdk_usage(
+            self.usage_collector,
+            self.result,
+            run_id=self.run_id,
+            model=self.model,
+            category=self.usage_category,
+            response_models=self.response_models,
+        )
 
     def snapshot(self):
         return self.journal.merge(self.compaction.snapshot(), interrupted=self.interrupted, tools=self.tools)

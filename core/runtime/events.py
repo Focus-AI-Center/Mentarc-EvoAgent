@@ -9,6 +9,21 @@ from agents.items import ToolCallItem, ToolCallOutputItem
 from utils.tool_results import tool_observation
 
 
+def task_progress_event(state, *, streaming):
+    """One activity card per internal task attempt, without child text or raw results."""
+    return {
+        "code": 5,
+        "content": json.dumps(
+            {
+                "id": "worker-progress-" + state["output_dir"],
+                "name": "worker_progress",
+                "result": json.dumps(state),
+                "streaming": streaming,
+            }
+        ),
+    }
+
+
 def _find_sub_agent_tool(tools: list):
     """Find the shared delegation entry point."""
     for t in tools:
@@ -147,7 +162,9 @@ async def _map_sdk_events(result, *, observer=None) -> AsyncGenerator[dict, None
                             {
                                 "id": tc_id,
                                 "name": tc_name,
-                                "result": output_str[:1000],
+                                "result": output_str
+                                if tc_name in {"sub_agent", "worker", "worker_status"}
+                                else output_str[:1000],
                                 **observation,
                             },
                             ensure_ascii=False,

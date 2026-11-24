@@ -1,10 +1,11 @@
 """Sub-agent API router — independent endpoints for typed agents."""
 
+import asyncio
 import json
 import uuid
 from contextlib import aclosing
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.schema.agent import AgentRequest
@@ -16,11 +17,24 @@ router = APIRouter()
 
 
 @router.get("/types")
-async def get_agent_types():
+async def get_agent_types(user_id: str | None = Query(default=None, alias="userId")):
     """List all available sub-agent types."""
-    types = list_agent_types()
+    workspace = None
+    if user_id is not None:
+        from app.api.routers.agent import _create_workspace
+
+        workspace = await _create_workspace(user_id)
+    types = await asyncio.to_thread(list_agent_types, workspace)
     return {
-        "types": [{"name": t.name, "description": t.description, "skills": t.skills} for t in types],
+        "types": [
+            {
+                "name": t.name,
+                "description": t.description,
+                "skills": t.skills,
+                "execution_mode": t.execution_mode,
+            }
+            for t in types
+        ],
         "count": len(types),
     }
 
@@ -46,11 +60,13 @@ async def sub_agent_chat(agent_type: str, request: AgentRequest):
         raise HTTPException(503, str(e)) from e
 
     try:
-        runner = SubAgentRunner(
+        runner = await asyncio.to_thread(
+            SubAgentRunner,
             agent_type=agent_type,
             user_id=user_id,
             session_id=session_id,
             workspace=workspace,
+            delegated=False,
         )
     except ValueError as e:
         raise HTTPException(404, str(e)) from e

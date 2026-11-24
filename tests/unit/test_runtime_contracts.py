@@ -298,7 +298,7 @@ async def test_answer_resumes_the_saved_worker_before_skill_matching(workspace, 
         side_effect=AssertionError("A saved answer must route before matching")
     )
     agent._create_sdk_agent = AsyncMock(
-        side_effect=AssertionError("No parent model needed for answer routing")
+        return_value=Agent(name="main", model=ScriptedModel(lambda *args: [final_message("Main delivery")]))
     )
     events = [event async for event in agent.run_stream("PDF")]
     assert observed[0][:3] == (
@@ -307,7 +307,7 @@ async def test_answer_resumes_the_saved_worker_before_skill_matching(workspace, 
         "PDF",
     )
     assert "current_user_input" in observed[0][3] and "Which format?" in observed[0][3]
-    assert any(event.get("task_id") == "report-a" for event in events)
+    assert "".join(event["content"] for event in events if event["code"] == 2) == "Main delivery"
     assert "question-a" not in pending_questions(workspace.history_load("main")["conversation"])
 
 

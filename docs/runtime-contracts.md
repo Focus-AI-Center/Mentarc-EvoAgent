@@ -2,7 +2,7 @@
 
 ## A question ends its own run
 
-Main and child SDK agents share a tool-result callback for `ask_user_question`.
+Main and directly connected child SDK agents share a tool-result callback for `ask_user_question`.
 After a valid question result, the SDK finishes the current tool batch and returns
 without another model request. Invalid arguments remain correctable by the model.
 Already dispatched parallel tools retain their real results. Asking does not
@@ -39,8 +39,9 @@ Answer metadata lives on the user history message. Compression carries pending
 questions in deterministic metadata and its recovery index, so IDs do not depend
 on an LLM reproducing them. Answered questions are not resurrected from an older
 waiting receipt. New waiting or delivered receipts supersede older question
-cards for that same worker/task. Question cards are separate; there is no merged questionnaire
-or new task scheduler.
+cards for that same worker/task. Question cards are separate; there is no merged
+questionnaire or scheduler that parks a task awaiting an answer. Internal
+[file-producing workers](workers.md) cannot ask the user directly.
 
 Implementation: [questions](../core/runtime/questions.py), [question tool](../core/plugins/ask_user.py)
 and [chat UI](../app/static/index.html).
@@ -87,10 +88,11 @@ an error. Generated references come from explicit output fields (`image_path`,
 a source URL or a tool input is not automatically a generated artifact.
 
 Delegation receipts retain individual `tool_outcomes` and artifact provenance.
-Artifacts have `delivery_status=produced` until their URL appears in a visible
-body/preview event; delivered ones also appear in `artifact_refs`. Tool-result
-cards alone do not establish delivery. Intermediate files are not automatically
-delivered, and there is no separate `deliver_artifacts` tool.
+In main-agent delegation chains, child artifacts have `delivery_status=produced`
+and child text is internal. The main agent reads and verifies stored result files
+before delivery. Direct user sessions retain their response and preview events.
+Tool-result cards alone do not establish delivery. Intermediate files are not
+automatically delivered, and there is no separate `deliver_artifacts` tool.
 
 `execution_status=completed` means a tool invocation returned; it is distinct
 from business success. A receipt's `delivery_complete` describes visible delivery,
@@ -123,6 +125,38 @@ The former unused `needs_followup` completion-check model call has been removed.
 Implementation: [usage data](../utils/usage.py), [SDK usage scope](../core/runtime/usage.py)
 and [SDK run composition](../core/runtime/execution.py).
 
+## SSE event protocol
+
+HTTP chat streams encode each event as `data: <JSON>` followed by a blank line.
+The outer object has `code` and `content`; chat routers also attach `requestId`.
+Structured event content is itself JSON text and must be decoded separately.
+
+| Code | Content and consumer behavior |
+|---|---|
+| 0 | Validation or answer-routing error text |
+| 2 | Assistant response text; append in order |
+| 3 | Stream markers such as `stream_start` and `stream_end` |
+| 4 | Tool call JSON: `id`, `name`, `arguments` |
+| 5 | Tool result JSON: `id`, `name`, `result`, typed outcome fields; progress may add `streaming` |
+| 6 | Token, cost and execution metrics |
+| 7 | Browser schedule create/delete records |
+| 8 | HTML preview metadata for supported render tools |
+| 9 | Todo task snapshots |
+| 10 | Structured question with a saved question ID and options |
+| 12 | Staged skill proposal containing every proposed file |
+
+Internal child text is not forwarded as code 2. Its task activity uses code 5
+with `name=worker_progress`; a stable per-attempt ID updates one card and
+`streaming=false` marks its terminal frame. The main agent's response remains
+code 2. Direct child sessions retain their own response, question and proposal
+events. See [worker progress](workers.md#dispatch-and-collection).
+
+Ordinary display results may be truncated independently of SDK input and saved
+execution facts. Internal task receipts remain complete JSON so clients can
+decode their files and status; proposal cards use their separate full code 12
+payload. Display frames are not evidence that a business action succeeded or
+that an artifact was delivered.
+
 ## Verification and boundaries
 
 Offline tests run the installed SDK with scripted models and local workspaces:
@@ -138,3 +172,15 @@ frontend answer identity, source snapshots, typed artifacts, explicit errors,
 update confirmation and measured parent/child usage. Live model behavior and
 cloud performance require separate evaluation. These components add no session
 execution locks, distributed ownership or automatic tool retries.
+
+## Delegation audience
+
+`SubAgentTool` explicitly invokes ordinary profiles with `delegated=True`;
+`WorkerTool` uses the same internal audience contract. Only the main agent
+communicates with the user in those chains. Delegated children return full
+response files and bounded receipts, while progress cards show execution only.
+User questions and skill confirmation cards belong to the main agent.
+
+Direct `/api/sub-agent/{type}/chat` sessions do not set this flag and retain
+user-facing replies, questions and proposals. The profile's stored instructions
+are not rewritten. See [invocation audience](agent-coordination.md#invocation-audience-and-internal-results).

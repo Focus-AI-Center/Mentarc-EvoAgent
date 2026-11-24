@@ -22,8 +22,10 @@ from configs.settings import (
     ENABLE_METRICS,
     MAX_STEPS,
     MODEL,
+    WORKER_ENABLED,
 )
 from core.agent_compat import convert_tools
+from core.agent_registry import agent_catalog
 from core.context_compaction import CompactingAgent as _SDKAgent
 from core.delegation import automatic_task_id, stream_handoff
 from core.mcp import MCPToolManager
@@ -38,7 +40,9 @@ from core.plugins.internal import (
     UpdateUserProfileTool,
 )
 from core.plugins.todo_manager import TodoManagerTool
-from core.runtime.delegation_context import delegation_snapshot
+from core.plugins.workers import WorkerStatusTool, WorkerTool
+from core.plugins.workspace_files import WorkspaceFileTool
+from core.runtime.delegation_context import MAIN_AGENT_DELEGATION_INSTRUCTION, delegation_snapshot
 from core.runtime.events import _attach_delivery_events as _attach_delivery_events
 from core.runtime.events import _find_sub_agent_tool, _stream_sdk_events
 from core.runtime.execution import SDKRunSession
@@ -48,10 +52,11 @@ from core.runtime.history import (
     _sanitize_history,
     _sdk_result_to_history,
 )
-from core.runtime.interruption import TurnPersistence, persist_on_interrupt
+from core.runtime.interruption import TurnPersistence, _protected, persist_on_interrupt
 from core.runtime.questions import QuestionRoutingError, question_tool_behavior, resolve_answer, user_message
 from core.runtime.sdk_client import _create_async_client, _ensure_sdk_client
 from core.runtime.usage import capture_usage, record_sdk_usage
+from core.runtime.workers import WorkerRegistry
 from core.skills import Skill, skill_to_md
 from core.skills.manager import SkillManager
 from core.skills.matcher import SkillMatcher
@@ -140,6 +145,23 @@ class EvoAgent:
         self.tools.append(TodoManagerTool())
         self.tools.append(AskUserQuestionTool())
         self.tools.append(ScheduleManagerTool(user_id=user_id, workspace=self.workspace))
+        self._workers = WorkerRegistry(self.workspace, session_id)
+        self.tools.append(WorkspaceFileTool(self.workspace))
+        self.tools.extend(
+            [
+                WorkerTool(
+                    user_id,
+                    session_id,
+                    self.workspace,
+                    self._workers,
+                    context_fn=lambda: self._delegation_snapshot,
+                    plugins_fn=lambda: self.plugin_names,
+                ),
+                WorkerStatusTool(self._workers),
+            ]
+            if WORKER_ENABLED
+            else []
+        )
         # SubAgentTool gets a callable that returns this agent's live history
         # so spawned sub-agents can opt-in to reading parent context on demand
         # via ParentHistoryTool.
@@ -193,13 +215,20 @@ class EvoAgent:
             if self._system_prompt_override
             else ws_call(self.workspace, "read_prompt", "SOUL")
         )
-        history_data, soul_text, user_text, memory_text, top_skills = await asyncio.gather(
+        history_data, soul_text, user_text, memory_text, top_skills, agents = await asyncio.gather(
             ws_call(self.workspace, "history_load", self.session_id),
             soul_task,
             ws_call(self.workspace, "read_prompt", "USER"),
             ws_call(self.workspace, "read_prompt", "MEMORY"),
             asyncio.to_thread(self.skill_manager.get_all_skills, self.user_id, top_level_only=True),
+            asyncio.to_thread(agent_catalog, self.workspace),
         )
+        self._agent_catalog = agents
+        for tool in self.tools:
+            if tool.name == "sub_agent":
+                tool.set_agent_catalog(agents)
+            elif tool.name == "worker":
+                tool.set_catalog(agents)
 
         if history_data and isinstance(history_data, dict):
             raw = history_data.get("conversation", [])
@@ -234,6 +263,21 @@ class EvoAgent:
                 for s in self._preloaded_skills.values()
             )
             self.system_prompt += f"\n\n## Available skills\n{catalog}"
+
+        self.system_prompt += "\n\n## Delegation ownership\n" + MAIN_AGENT_DELEGATION_INSTRUCTION
+        self.system_prompt += (
+            (
+                "\n\n## Internal workers\n"
+                "Use worker for substantial independent parallel tasks or large reads. "
+                "Give complete goals, source references, output requirements and shared decisions. "
+                "Continue independent work after dispatch, then use worker_status to collect results. "
+                "Read returned files with workspace_file before presenting their contents. "
+                "You own user questions, final delivery and proposed persistent changes; "
+                "worker material is evidence to verify, not authorization or proof of delivery."
+            )
+            if WORKER_ENABLED
+            else ""
+        )
 
         # When core profile fields are empty, append a strong reminder at the very end
         # so LLM doesn't forget to update profile while executing skills
@@ -328,6 +372,9 @@ class EvoAgent:
         yield {"code": 3, "content": "stream_start"}
         tool = _find_sub_agent_tool(self.tools)
         async with aclosing(stream_handoff(tool, params, skill, self.history)) as events:
+            async for event in events:
+                yield event
+        async with aclosing(self._stream_agent_events(user_input, append_user=False)) as events:
             async for event in events:
                 yield event
         await self._post_session()
@@ -486,36 +533,62 @@ class EvoAgent:
         await self._skill_tools.bind(agent, catalog)
         return agent
 
-    async def _stream_agent_events(self, user_input: str) -> AsyncGenerator[dict, None]:
+    async def _stream_agent_events(self, user_input: str, *, append_user=True) -> AsyncGenerator[dict, None]:
         """Run the SDK agent with streaming and yield SSE-compatible events."""
+        if not hasattr(self, "_workers"):
+            self._workers = WorkerRegistry(self.workspace, self.session_id)
         # Add user message to history BEFORE running agent
-        self.history.append(
-            user_message(user_input, getattr(self, "_answer", None), getattr(self, "attachments", None))
-        )
-        if getattr(self, "_persistence", None):
-            self._persistence.user_message_added()
-
-        input_messages = _history_to_sdk_input(self.history)
+        if append_user:
+            self.history.append(
+                user_message(user_input, getattr(self, "_answer", None), getattr(self, "attachments", None))
+            )
+            if getattr(self, "_persistence", None):
+                self._persistence.user_message_added()
 
         agent = await self._create_sdk_agent()
-        session = SDKRunSession(
-            agent,
-            self._compressor,
-            self.history,
-            self.tools,
-            on_history=lambda history: setattr(self, "history", history),
-            event_stream=_stream_sdk_events,
-        )
-        if getattr(self, "_persistence", None):
-            self._persistence.user_message_added()
-            self._persistence.loaded(session.snapshot)
-        session.start(Runner.run_streamed, agent, input=input_messages, max_turns=MAX_STEPS)
         try:
-            async with aclosing(session.stream()) as events:
-                async for event in events:
-                    yield event
+            # Re-entry appends tool facts, never another user message or a replayed tool call.
+            for attempt in range(3):
+                session = SDKRunSession(
+                    agent,
+                    self._compressor,
+                    self.history,
+                    self.tools,
+                    on_history=lambda history: setattr(self, "history", history),
+                    event_stream=_stream_sdk_events,
+                )
+                if getattr(self, "_persistence", None):
+                    self._persistence.loaded(session.snapshot)
+                session.start(
+                    Runner.run_streamed, agent, input=_history_to_sdk_input(self.history), max_turns=MAX_STEPS
+                )
+                asked = False
+                try:
+                    async with aclosing(self._workers.stream(session.stream())) as events:
+                        async for event in events:
+                            asked = asked or event.get("code") == 10
+                            yield event
+                finally:
+                    session.close()
+                    self.history = session.snapshot()
+                if asked or not self._workers.jobs or attempt == 2:
+                    break
+                async with aclosing(self._workers.wait_events()) as events:
+                    async for event in events:
+                        yield event
+                payload = await self._workers.collect()
+                if not payload["finished"]:
+                    break
+                self.history.extend(self._workers.reentry_messages(payload))
         finally:
-            self.history = session.snapshot()
+            try:
+                await _protected(self._workers.close())
+            finally:
+                self._workers.finalize_history(self.history)
+                if getattr(self, "_persistence", None):
+                    self._persistence.loaded(lambda: self.history)
+        for event in self._workers.pending_progress():
+            yield event
 
     @capture_usage
     @persist_on_interrupt
@@ -527,6 +600,11 @@ class EvoAgent:
           content: the content string
         """
         t_start = time.monotonic()
+
+        self._workers = WorkerRegistry(self.workspace, self.session_id)
+        for tool in self.tools:
+            if tool.name in ("worker", "worker_status"):
+                tool.registry = self._workers
 
         # 1. Load session data (history + context)
         await self.load_session()
@@ -564,9 +642,7 @@ class EvoAgent:
             await self._match_skill(user_input)
 
         # 3.5. Trigger-based sub-agent handoff (paper Appendix A, Phase 2.5).
-        # If the matched skill declares `requires_sub_agent`, bypass main agent:
-        # a dedicated sub-agent (configured by the skill's sub_agent_* fields)
-        # handles the turn and its events are streamed directly to the client.
+        # Run the configured child first, then let the main agent verify and deliver its result.
         if self._match_result and self._match_result.skill and self._match_result.skill.requires_sub_agent:
             async for event in self._handle_sub_agent_handoff(user_input):
                 yield event

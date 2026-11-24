@@ -16,6 +16,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from core.agent_compat import BaseTool
+from core.agent_registry import agent_catalog
 from core.delegation import TASK_ID_PATTERN, new_task_id, run_delegation, task_session_base
 from core.runtime.delegation_context import render_delegation_context
 from core.skills.manager import SkillManager
@@ -1183,7 +1184,7 @@ class SubAgentParams(BaseModel):
 
     task: str = Field(description="Task for the sub-agent")
     agent_type: str = Field(
-        description="Sub-agent type matching a .md filename under configs/agents/",
+        description="Interactive agent type from the effective workspace/default agent catalog",
     )
     context: str | None = Field(
         default=None,
@@ -1200,13 +1201,14 @@ class SubAgentParams(BaseModel):
 
 
 class SubAgentTool(BaseTool):
-    """Stream child delivery immediately and return a task receipt to the model."""
+    """Return internal child results to the main agent and expose execution progress."""
 
     name: str = "sub_agent"
     description: str = (
-        "Delegate an independent task to a sub-agent. Its output streams directly to the user; "
-        "the returned JSON is a delivery receipt. Do not repeat delivered output. "
-        "Reuse its owner and task_id for revisions or answers to pending_questions."
+        "Delegate an independent task to an internal sub-agent. Only you communicate with the user. "
+        "Read and verify the returned result files, then present the outcome or ask missing questions "
+        "yourself. The child cannot ask the user or present skill proposals. "
+        "Reuse its owner and task_id for follow-ups and revisions."
     )
     param_anno = SubAgentParams
 
@@ -1230,36 +1232,47 @@ class SubAgentTool(BaseTool):
         self.event_sink = None
         self.deliveries = {}
         self._inflight = {}
-        # Dynamically build description from available agent types
-        try:
-            from core.sub_agent import list_agent_types
+        self._agent_catalog = None
 
-            agents = list_agent_types()
-            if agents:
-                lines = "\n".join(f"- {a.name}: {a.description}" for a in agents)
-                self.description += f"\nAvailable types:\n{lines}"
-        except Exception:
-            pass
+    def set_agent_catalog(self, catalog):
+        self._agent_catalog = catalog
+        lines = "\n".join(
+            f"- {config.name}: {config.description}"
+            for config in catalog.values()
+            if config.execution_mode == "interactive"
+        )
+        self.description = type(self).description + "\nAvailable types:\n" + lines
 
     async def delegate(self, params: SubAgentParams, *, skill=None, emit=None) -> dict:
         """Both explicit delegation and automatic skill handoff use this path."""
         from core.sub_agent import SubAgentRunner
 
         task_id = params.task_id or new_task_id()
+        output_dir = f"workers/{task_session_base(self._session_id, task_id)}/{uuid4().hex[:12]}"
+        if self._agent_catalog is None:
+            self.set_agent_catalog(await asyncio.to_thread(agent_catalog, self._workspace))
         kwargs = dict(
             user_id=self._user_id,
             session_id=task_session_base(self._session_id, task_id),
             workspace=self._workspace,
             parent_history_fn=self._parent_history_fn,
             usage_collector=current_usage(),
+            delegated=True,
+            output_dir=output_dir,
         )
         try:
             if skill:
                 runner = SubAgentRunner.from_skill(skill, **kwargs)
             else:
                 try:
-                    runner = SubAgentRunner(agent_type=params.agent_type, **kwargs)
+                    if self._agent_catalog is not None:
+                        config = self._agent_catalog.get(params.agent_type)
+                        if config is None:
+                            raise ValueError(f"Agent type '{params.agent_type}' is unavailable in this turn.")
+                        kwargs["agent_config"] = config
+                    runner = await asyncio.to_thread(SubAgentRunner, agent_type=params.agent_type, **kwargs)
                 except ValueError:
+                    kwargs.pop("agent_config", None)
                     skills = await asyncio.to_thread(
                         SkillManager(self._workspace).get_all_skills,
                         self._user_id,
@@ -1291,6 +1304,7 @@ class SubAgentTool(BaseTool):
             "task_id": task_id,
             "owner": runner.config.name,
             "session_id": runner.session_id,
+            "output_dir": output_dir,
             "status": "interrupted",
             "delivery_complete": False,
             "request": params.model_dump(),
@@ -1313,7 +1327,16 @@ class SubAgentTool(BaseTool):
         if answer and answer.get("task_id") == task_id and answer.get("agent_type") == params.agent_type:
             runner.answer_to = {"question_id": answer["question_id"]}
         context = render_delegation_context(snapshot, params.context or "")
-        receipt = await run_delegation(runner, params.task, context, task_id, record)
+        receipt = await run_delegation(
+            runner,
+            params.task,
+            context,
+            task_id,
+            record,
+            internal=True,
+            workspace=self._workspace,
+            output_dir=output_dir,
+        )
         self._inflight.pop(delivery_id, None)
         receipt["delivery_id"] = delivery_id
         self.deliveries[delivery_id] = events
@@ -1324,6 +1347,8 @@ class SubAgentTool(BaseTool):
         try:
             request = json.loads(arguments)
         except (ValueError, TypeError):
+            return []
+        if not isinstance(request, dict):
             return []
         return [
             record

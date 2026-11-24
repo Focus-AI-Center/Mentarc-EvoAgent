@@ -4,6 +4,12 @@ EvoAgent can run as a Cloud Agent: the API process orchestrates the model and
 workspace tools, MinIO stores durable user state, and a session sandbox supplies
 an execution environment when a task needs code or a stdio MCP process.
 
+Internal [workers](workers.md) are available in both LOCAL and MINIO modes. Their
+agent definitions live under the user's `agents/` prefix, and outputs under
+`workers/<thread>/<attempt>/`. Worker text files use the storage SDK directly;
+starting a worker does not allocate a container. Code execution retains the
+selected backend's existing user/session scope.
+
 A cloud workspace is an object namespace. It remains available to the Agent even
 when no execution container is running. This is why ordinary skill and memory
 operations use workspace tools directly instead of requiring a shell command.
@@ -39,9 +45,9 @@ skill(action="get_ref", name="buyer-lead-screening", ref_filename="rules.md")
 ```
 
 The API process resolves the workspace path and reads MinIO through its SDK.
-It does not call Docker or require an execution container. Likewise, `save`,
-`patch` and `ref_set` write text through the storage backend without starting a
-shell. `patch` reads and conditionally updates one existing document, preserving
+It does not call Docker or require an execution container. Proposal staging and
+user confirmation also write through the storage backend without starting a
+shell. A confirmed `patch` reads and conditionally updates one existing document, preserving
 unrelated text. See the [exact patch contract](skill-extraction.md#exact-patches).
 
 A bash read of the same content would use an additional sandbox execution path:

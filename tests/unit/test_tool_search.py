@@ -295,8 +295,9 @@ async def test_invalid_search_does_not_discover_tools(query, limit):
 class SearchThenCallModel(Model):
     """Offline model asserting the schemas visible on each SDK model turn."""
 
-    def __init__(self, name):
+    def __init__(self, name, exact_names=False):
         self.target = name
+        self.exact_names = exact_names
         self.seen = []
 
     def response(self, tools, input):
@@ -309,7 +310,9 @@ class SearchThenCallModel(Model):
                     type="function_call",
                     call_id="search-call",
                     name="toolsearch",
-                    arguments=json.dumps({"query": self.target, "limit": 1}),
+                    arguments=json.dumps(
+                        {"names": [self.target]} if self.exact_names else {"query": self.target, "limit": 1}
+                    ),
                 )
             ]
         elif turn == 2:
@@ -366,9 +369,10 @@ class SearchThenCallModel(Model):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streamed", [False, True])
-async def test_sdk_search_then_call_works_in_same_run(streamed):
+@pytest.mark.parametrize("exact_names", [False, True])
+async def test_sdk_search_then_call_works_in_same_run(streamed, exact_names):
     calls = []
-    model = SearchThenCallModel("mcp__server__docs__lookup")
+    model = SearchThenCallModel("mcp__server__docs__lookup", exact_names=exact_names)
 
     async def loader(_existing):
         return [make_tool(model.target, calls=calls)]

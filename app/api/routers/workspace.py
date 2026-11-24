@@ -1,6 +1,8 @@
 """Workspace API router — workspace file management."""
 
+import asyncio
 import base64
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -8,11 +10,34 @@ from pydantic import BaseModel
 
 from utils.image_upload import upload_image
 from utils.workspace import Workspace
+from utils.ws_call import ws_call
 
 router = APIRouter()
 
 ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
+
+
+@router.get("/{user_id}/worker-files/{file_path:path}")
+async def download_worker_file(user_id: str, file_path: str):
+    """Download internal worker artifacts as attachments, never executable previews."""
+    if not file_path.startswith("workers/") or "\\" in file_path:
+        raise HTTPException(400, "Invalid worker file path")
+    try:
+        workspace = await asyncio.to_thread(Workspace, user_id)
+        data = await ws_call(workspace, "file_read_bytes", file_path)
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid worker file path") from exc
+    if data is None:
+        raise HTTPException(404, "Worker file not found")
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": "attachment; filename*=UTF-8''" + quote(file_path.rsplit("/", 1)[-1]),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 class FileUpdateRequest(BaseModel):

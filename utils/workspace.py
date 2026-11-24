@@ -14,7 +14,7 @@ Async fan-out (``asyncio.gather`` over the prompt-loading chain) is layered
 on top via ``read_text_async`` for the few hot paths that benefit.
 
 On first access the workspace is initialized by copying the platform-owned
-templates from ``DEFAULT_PROMPTS_DIR`` and ``DEFAULT_SKILLS_DIR`` (still on
+templates from ``DEFAULT_PROMPTS_DIR``, ``DEFAULT_AGENTS_DIR`` and ``DEFAULT_SKILLS_DIR`` (still on
 the server's local filesystem — they're packaged with the deployment) into
 the user's prefix. ``SOUL.md`` is force-overwritten on every sync; user
 files (``MEMORY.md`` etc.) are only seeded on first access.
@@ -30,9 +30,11 @@ from pathlib import Path
 from urllib.parse import quote
 
 from configs.settings import (
+    DEFAULT_AGENTS_DIR,
     DEFAULT_PROMPTS_DIR,
     DEFAULT_SKILLS_DIR,
 )
+from utils.logger import logger
 from utils.memory_index import parse_memory_index
 from utils.skill_patching import patch_skill_text
 from utils.skill_references import normalize_reference_path
@@ -46,11 +48,12 @@ from utils.storage_backend import (
 
 _DEFAULTS_DIR = Path(DEFAULT_PROMPTS_DIR)
 _DEFAULTS_SKILLS_DIR = Path(DEFAULT_SKILLS_DIR)
+_DEFAULTS_AGENTS_DIR = Path(DEFAULT_AGENTS_DIR)
 
 
 def _compute_sync_version() -> str:
     """Hash of platform-owned templates. Used to gate per-user re-sync."""
-    parts: list[str] = ["skill-layout-v2"]
+    parts: list[str] = ["skill-layout-v2", "workspace-agents-v1"]
     soul = _DEFAULTS_DIR / "SOUL.md"
     if soul.exists():
         st = soul.stat()
@@ -60,6 +63,9 @@ def _compute_sync_version() -> str:
             if f.is_file():
                 st = f.stat()
                 parts.append(f"{f.relative_to(_DEFAULTS_SKILLS_DIR)}:{st.st_mtime_ns}:{st.st_size}")
+    for path in sorted(_DEFAULTS_AGENTS_DIR.glob("*.md")):
+        st = path.stat()
+        parts.append(f"agent:{path.name}:{st.st_mtime_ns}:{st.st_size}")
     return hashlib.md5("\n".join(parts).encode()).hexdigest() if parts else ""
 
 
@@ -140,7 +146,7 @@ class Workspace:
     def _key(self, *parts: str) -> str:
         """Build ``{user_id}/<parts>``; raise on traversal attempts in parts.
 
-        The first part is one of ``prompts/skills/sessions/images/previews/.meta``
+        The first part is one of ``prompts/agents/skills/sessions/images/previews/.meta``
         and is always supplied by us — only the remaining parts come from the
         caller, so we validate those.
         """
@@ -201,7 +207,7 @@ class Workspace:
     # ── Init ─────────────────────────────────────────────────────────────
 
     def _init_workspace(self) -> None:
-        """Seed default prompts + builtin skills if not already at current version."""
+        """Seed prompts, agent definitions and builtin skills at the current template version."""
         version_key = self._key(".meta", "sync_version")
         stored = self._read_text(version_key).strip()
         if stored == _SYNC_VERSION:
@@ -216,7 +222,47 @@ class Workspace:
                     self._write_text(target, md.read_text(encoding="utf-8"))
 
         self.sync_builtin_skills()
+        for md in _DEFAULTS_AGENTS_DIR.glob("*.md"):
+            target = self._key("agents", md.name)
+            if not self._exists(target):
+                try:
+                    content = md.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    logger.warning("Unreadable default agent definition skipped: {}", md.name)
+                    continue
+                self._write_text(target, content)
         self._write_text(version_key, _SYNC_VERSION)
+
+    # Agent definitions are user-owned after their initial template copy.
+    def agent_get(self, name: str) -> str | None:
+        return self.file_read(f"agents/{self._agent_name(name)}.md")
+
+    def agent_set(self, name: str, content: str) -> None:
+        self.file_write(f"agents/{self._agent_name(name)}.md", content)
+
+    @staticmethod
+    def _agent_name(name: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", name):
+            raise ValueError("Agent names must contain 1-64 ASCII letters, digits, underscores or hyphens.")
+        return name
+
+    def agent_get_all(self) -> dict[str, str]:
+        prefix = f"{self.user_id}/agents/"
+        result = {}
+        for key in self._list(prefix):
+            filename = key.removeprefix(prefix)
+            if "/" not in filename and filename.endswith(".md"):
+                try:
+                    name = self._agent_name(filename[:-3])
+                except ValueError:
+                    continue
+                try:
+                    content = self.agent_get(name)
+                except UnicodeDecodeError:
+                    content = ""  # An invalid override must still shadow its default.
+                if content is not None:
+                    result[name] = content
+        return result
 
     # ── Prompts ──────────────────────────────────────────────────────────
 
@@ -259,6 +305,19 @@ class Workspace:
             return self._backend.read_text_sync(key)
         except KeyNotFoundError:
             return None
+
+    def file_write(self, file_path: str, content: str) -> None:
+        """Write UTF-8 text directly to this user's storage backend."""
+        self._write_text(self._workspace_file_key(file_path), content)
+
+    def file_read_bytes(self, file_path: str) -> bytes | None:
+        """Read a workspace artifact without decoding it, with the same path checks."""
+        return self._read_bytes(self._workspace_file_key(file_path))
+
+    def file_list(self, directory: str) -> list[str]:
+        """List files below one workspace directory, excluding sibling prefixes."""
+        prefix = self._workspace_file_key(directory).rstrip("/") + "/"
+        return [key.removeprefix(self._user_prefix()) for key in sorted(self._list(prefix))]
 
     def _workspace_file_key(self, file_path: str) -> str:
         _validate_segment(file_path, allow_slash=True)
@@ -477,7 +536,7 @@ class Workspace:
         self._delete(key)
         return True
 
-    def list_sessions(self) -> list[dict]:
+    def list_sessions(self, *, include_internal: bool = False) -> list[dict]:
         result = []
         prefix = f"{self.user_id}/sessions/"
         for k in self._list(prefix):
@@ -486,6 +545,8 @@ class Workspace:
                 continue
             data = self._read_json(k)
             if not isinstance(data, dict):
+                continue
+            if not include_internal and data.get("execution_mode") == "worker":
                 continue
             preview = ""
             for msg in data.get("conversation", []):
@@ -664,7 +725,7 @@ class Workspace:
                 },
             }
         sessions = {}
-        for item in self.list_sessions():
+        for item in self.list_sessions(include_internal=True):
             sid = item["session_id"]
             record = self.history_load(sid)
             if record is not None:
@@ -683,6 +744,12 @@ class Workspace:
             "version": 1,
             "user_id": self.user_id,
             "prompts": prompts,
+            "agents": self.agent_get_all(),
+            "worker_files": {
+                path: base64.b64encode(data).decode("ascii")
+                for path in self.file_list("workers")
+                if (data := self._read_bytes(self._workspace_file_key(path))) is not None
+            },
             "memory_files": memory_files,
             "skills": skills,
             "sessions": {"index": self.list_sessions(), "records": sessions},
@@ -696,6 +763,13 @@ class Workspace:
         for name, content in (snapshot.get("prompts") or {}).items():
             if isinstance(name, str) and isinstance(content, str):
                 self.write_prompt(name, content)
+        for name, content in (snapshot.get("agents") or {}).items():
+            if isinstance(name, str) and isinstance(content, str):
+                self.agent_set(name, content)
+        for path, encoded in (snapshot.get("worker_files") or {}).items():
+            if not path.startswith("workers/"):
+                raise ValueError("Worker snapshot files must be under workers/.")
+            self._write_bytes(self._workspace_file_key(path), base64.b64decode(encoded, validate=True))
         for file_path, content in (snapshot.get("memory_files") or {}).items():
             if isinstance(file_path, str) and isinstance(content, str):
                 self._write_text(self._workspace_file_key(file_path), content)

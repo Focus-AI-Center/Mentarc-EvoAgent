@@ -1,7 +1,12 @@
 # Task threads, live delegation and skill lifecycle
 
+Named agent profiles now resolve from the user's workspace `agents/` directory
+before built-in defaults. `execution_mode: worker` selects internal file-producing
+execution through `worker`/`worker_status`. Ordinary profiles support direct user
+sessions and internal delegation, with the audience determined at invocation. See [workers and agent definitions](workers.md).
+
 For example, a user asks for two reports and later requests a revision to the
-first. Each report needs its own child history, live output and delivery status.
+first. Each report needs its own child history, output files and execution status.
 The revision must reuse the first report's task ID rather than start over.
 
 ## Task identity
@@ -46,68 +51,80 @@ different automatic-handoff thread or resume a named one:
 its supplied session ID. Skill-backed workers can also be resumed through the
 tool using the owner and task ID from their receipt.
 
-## Live output and handoff receipts
+## Invocation audience and internal results
 
-Child events are forwarded while the child is running, through a request-local
-channel. Mutable task state belongs to each invocation; concurrent calls do not
-share a result buffer. Forwarded events add `task_id`, `source_agent` and
-`delivery_owner`. The parent owns the outer stream markers and metrics.
+The invocation route determines who communicates with the user:
 
-The built-in chat UI keeps text and tool cards separate for each task. API
-consumers must also accumulate text by `(source_agent, task_id)` rather than
-concatenate interleaved JSON or Markdown fragments into one response.
+| Route | Audience and behavior |
+|---|---|
+| Direct `/api/sub-agent/{type}/chat` | The selected agent replies, asks questions and presents skill proposals to the user |
+| Main-agent `sub_agent(...)` | The child reports internal findings and files; the main agent verifies and delivers |
+| Automatic `requires_sub_agent` handoff | The child runs first; the main agent resumes to verify and deliver |
+| Internal `worker(...)` | Background file-producing work is collected by the main agent |
 
-The model receives a JSON receipt rather than the full child transcript:
+The same ordinary profile can serve either audience. The API uses the runner's
+normal direct mode; `SubAgentTool` explicitly passes `delegated=True`. Workers
+also use the delegated audience contract. The runtime appends this instruction
+without modifying or copying the stored agent definition:
+
+> Only the main agent communicates with the user in this delegation chain.
+
+The child receives further instructions to return findings, file paths and gaps
+to the parent. In delegated mode, user-question and delivery tools are removed,
+and `skill` permits only `list`, `get` and `get_ref`. The policy applies to initial
+schemas, skill tool mounts and Tool Search, including eager discovery. Analytical
+agents retain their existing profile and memory tools; workers have the stricter
+policy described in [workers](workers.md#limits-and-lifecycle). Direct sessions
+retain their original tools and user interaction behavior.
+
+Delegated text, preview, question and proposal events do not become user-facing
+child responses. A request-local channel sends only sanitized task progress,
+tool activity and final file links, using the same `worker_progress` cards as
+background workers. Mutable task state belongs to each invocation. Direct user
+sessions keep their existing event protocol.
+
+The parent receives a bounded receipt, while the complete child response is
+stored in the workspace:
 
 ```json
 {
   "type": "sub_agent_receipt",
   "task_id": "report-a",
-  "owner": "worker",
-  "session_id": "sa_worker_task_<hash>",
-  "status": "delivered",
-  "delivery_complete": true,
-  "delivered_codes": [2],
-  "artifact_refs": ["https://example.com/report.pdf"],
-  "summary": "A bounded description of what was delivered",
-  "delivery_id": "<unique delivery identifier>"
+  "owner": "analyst",
+  "session_id": "sa_analyst_task_<hash>",
+  "status": "completed",
+  "delivery_complete": false,
+  "delivered_codes": [],
+  "output_dir": "workers/task_<hash>/<attempt>",
+  "files": ["workers/task_<hash>/<attempt>/response.md"],
+  "artifact_refs": [],
+  "summary": "A bounded description of the internal result"
 }
 ```
 
-Statuses are `delivered`, `waiting_user` and `failed`. A waiting receipt also
-contains `resume_agent`, `resume_task_id` and `pending_questions`.
-`waiting_user` with `delivery_complete=true` means the question was delivered;
-the business task is still pending. Partial failures retain delivery facts and
-include `failures`; they must not be presented as successful completion.
+`completed` describes child execution, not user delivery or verified correctness.
+The parent reads the files with `workspace_file`, checks sources and tool outcomes,
+then writes its own response. Produced artifacts remain `produced` until the main
+agent delivers them. Missing requirements are reported to the parent. A legacy
+or custom child question is captured as `questions_for_parent` with status
+`needs_input`; it is not a pending question shown to the user. The main agent
+asks any necessary question itself. Failures, cancellation and timeout remain
+explicit, and partial text is retained when storage succeeds.
 
-The child owns its delivery. The parent should continue independent work, report
-failures accurately and avoid repeating visible output or regenerating files.
-For a revision, delegate again with the same owner and task ID. Question cards
-include a question ID; answers carrying `answerTo` are resolved from saved history
-and routed to the original worker before skill matching. Plain text follow-ups
-retain model-directed routing. There are no merged question cards or separate
-resume scheduler. See [runtime contracts](runtime-contracts.md).
+Child skill proposals are prepared as candidate files for the main agent to
+review and propose. Confirmation cards originate from the main agent in this
+chain. Direct child sessions can still use `skill(propose)` and receive the
+normal confirmation flow. Existing saved child questions remain answerable for
+history compatibility, after which the main agent handles presentation.
 
-Receipts also retain typed `artifacts` and per-call `tool_outcomes`. Only output
-references that appear in visible body/preview events enter `artifact_refs`;
-ordinary source links are not classified as generated artifacts. Tool errors
-remain distinct from fatal run failures and visible delivery status.
-
-Skill proposals are staged by the `skill` tool and delivered through code 12 as
-structured events with the full text of every file, so they are not subject to
-the summary cap and never appear in ordinary text streaming. A delegated agent's
-proposal reaches the user directly; the parent receives only the receipt. User
-confirmation is required before anything is saved.
-
-Child history is saved before its end marker. Parent history stores receipts in
-tool messages. Full display events are saved separately on those messages as
-`delivery_events` for UI replay, and are excluded from model input and token
-budget calculations. Context compression preserves recent receipt identities
-in its asset index. Closing the stream cancels the SDK run and the event pump,
-then saves interruption facts through the shared persistence component. Generated
-child task IDs remain recoverable even if cancellation prevents a final receipt.
-This does not provide durable execution or automatic recovery after a process
-restart. See [runtime components](runtime-components.md).
+Automatic handoff appends one paired `sub_agent` call/result and continues the
+main SDK loop without adding another user message. Parent history saves internal
+receipts and sanitized progress in `delivery_events` for UI replay; that metadata
+is excluded from model input and token budgets. Child histories remain separate.
+Closing the stream cancels execution and preserves interruption facts and partial
+files when storage succeeds. Generated task IDs and output directories remain
+available for follow-ups. This does not provide durable execution or automatic
+recovery after a process restart. See [runtime components](runtime-components.md).
 
 ## Skill guides and tool grants
 
@@ -150,6 +167,6 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -p asyncio \
   tests/unit/test_tool_search.py tests/unit/test_skill_references.py -q
 ```
 
-They cover thread reuse/isolation, concurrent live delivery, receipts, partial
+They cover thread reuse/isolation, concurrent internal progress and result collection, receipts, partial
 failure, proposal preservation, cancellation, automatic handoff, UI task buckets,
 SDK schema updates, history restoration and compression/reload behavior.

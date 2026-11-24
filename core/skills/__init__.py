@@ -80,9 +80,8 @@ class Skill(BaseModel):
         return normalize_references(value)
 
     # Trigger-based sub-agent handoff (paper Appendix A, Phase 2.5).
-    # When set, matching this skill bypasses the main agent: a dedicated
-    # sub-agent is spawned with `sub_agent_instructions` + `sub_agent_tools`
-    # and its result is surfaced directly to the user.
+    # Run a dedicated child with `sub_agent_instructions` + `sub_agent_tools`
+    # before the main agent verifies the internal result and delivers it.
     requires_sub_agent: bool = False
     sub_agent_name: str | None = None
     sub_agent_instructions: str | None = None

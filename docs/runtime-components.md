@@ -18,7 +18,11 @@ Main and child agents share these components:
 | `core/runtime/sdk_client.py` | Shared proxy-aware SDK client initialization |
 | `core/runtime/questions.py` | End asking runs and resolve answers from saved question identity |
 | `core/runtime/delegation_context.py` | Current input/attachment snapshots and prior source references |
+| `core/runtime/internal_delegation.py` | Internal child collection, file receipts and parent-only delivery |
 | `core/runtime/usage.py` | Request usage scope and deduplicated SDK accounting |
+| `core/runtime/workers.py` | Request-local jobs, deadlines, progress, result collection and cleanup |
+| `core/runtime/tool_policy.py` | Worker tool/action restrictions across all schema-loading paths |
+| `core/agent_registry.py` | Workspace-first agent definitions and per-turn catalogs |
 | `core/context_compaction.py` | Replace model history at SDK step boundaries |
 | `core/delegation.py` | Task identity, delivery receipts and automatic handoff |
 | `core/skills/tool_mounting.py` | Skill-specific tool grants and unloading |
@@ -41,6 +45,10 @@ Existing delegation, compaction and skill modules retain their own boundaries;
 there is no general plugin registry or event bus for these lifecycle operations.
 The standalone session updater remains a separate flow.
 
+Internal file-producing workers reuse the child executor without forwarding its
+user-output channels. The main SDK loop can continue after dispatch, collect
+receipts and resume from paired tool facts. See [workers](workers.md).
+
 See [runtime contracts](runtime-contracts.md) for question boundaries and answer
 routing, delegation source separation, tool outcomes and measured usage.
 
@@ -53,6 +61,10 @@ and complete tool arguments; display truncation does not limit saved arguments.
 After compression, journal identities represented in the new summary are
 retired. Late stream events cannot reappend those old items to history. Usage,
 raw responses and already queued display events retain their existing behavior.
+
+`SDKRunSession.close()` also cancels an SDK run whose event generator was never
+entered, covering deadlines or closure immediately after dispatch. Usage records
+remain deduplicated when both stream cleanup and its owner close the session.
 
 ## Interruption lifecycle
 
@@ -72,12 +84,19 @@ raw responses and already queued display events retain their existing behavior.
 5. Preserve unfinished assistant text with an incomplete-response label. Do not
    fabricate closing JSON, a completed business card or a successful result.
 6. Append an execution-interrupted note and save through the existing workspace.
-   Cleanup emits no new SSE events and never automatically retries tools.
+   Interruption cleanup emits no new SSE events and never automatically retries tools.
 
 Explicit and skill-triggered delegation preserve the child task ID on
 interruption, including IDs generated after the original model call. Partial
 display events remain available for replay. A later agent can verify the child
 history using the original thread rather than create a new task accidentally.
+Internal child receipts also retain their session ID and output directory when
+an automatic handoff is cancelled, so stored partial files remain discoverable.
+
+During normal turn completion, including a main-agent question or the final
+worker continuation, worker cleanup can still produce terminal progress. Those
+frames are flushed before the open SSE stream ends. Disconnect/closure cleanup
+does not attempt to emit output into a closed transport.
 
 Both HTTP chat routers explicitly close their source generators when the SSE
 response closes. Shielding handles Starlette/AnyIO cancellation scopes as well

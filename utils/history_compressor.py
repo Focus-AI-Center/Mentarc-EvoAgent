@@ -326,8 +326,11 @@ class HistoryCompressor:
                     data = json.loads(message.get("content", ""))
                 except (ValueError, TypeError):
                     data = None
-                if isinstance(data, dict) and data.get("type") == "sub_agent_receipt":
-                    rows.append(data)
+                if isinstance(data, dict):
+                    if data.get("type") in ("sub_agent_receipt", "worker_receipt"):
+                        rows.append(data)
+                    if message.get("name") == "worker_status":
+                        rows.extend(row for row in data.get("finished", []) if isinstance(row, dict))
             for row in rows:
                 if not isinstance(row, dict) or not row.get("task_id"):
                     continue

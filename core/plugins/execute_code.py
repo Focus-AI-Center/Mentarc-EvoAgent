@@ -130,6 +130,7 @@ class ExecuteCodeTool(BaseTool):
         super().__init__(**kwargs)
         self._user_id = kwargs.get("user_id") or "anonymous"
         self._session_id = kwargs.get("session_id") or "default"
+        self._default_cwd = kwargs.get("workspace_cwd") or ""
 
     async def __call__(self, params: ExecuteCodeParams) -> str:
         code = (params.code or "").strip()
@@ -161,7 +162,7 @@ class ExecuteCodeTool(BaseTool):
                     ensure_ascii=False,
                 )
 
-        rel_cwd, cwd_err = _validate_cwd(params.cwd)
+        rel_cwd, cwd_err = _validate_cwd(params.cwd or self._default_cwd)
         if cwd_err:
             return json.dumps({"success": False, "error": cwd_err}, ensure_ascii=False)
 

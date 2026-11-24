@@ -330,6 +330,8 @@ async def test_interrupted_delegation_preserves_child_thread_and_parent_receipt(
     thread = receipt if automatic else receipt["delegations"][0]
     assert thread["task_id"] and thread["resume_task_id"] == thread["task_id"]
     assert thread["status"] == "interrupted" and not thread["delivery_complete"]
+    assert thread["session_id"] == children[0].session_id
+    assert thread["output_dir"].startswith("workers/task_")
 
 
 @pytest.mark.asyncio

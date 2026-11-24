@@ -5,6 +5,21 @@ from copy import deepcopy
 
 from utils.context_recovery import collect_assets
 
+DELEGATED_AGENT_INSTRUCTION = (
+    "Only the main agent communicates with the user in this delegation chain. "
+    "You are an internal sub-agent: return your findings, output file paths and missing information "
+    "to the main agent. Do not address or question the user, deliver user-facing content, or present "
+    "confirmation cards. The main agent verifies your work and owns user questions, final delivery "
+    "and skill proposals. Prepare candidate skill changes for the main agent instead of proposing them."
+)
+
+MAIN_AGENT_DELEGATION_INSTRUCTION = (
+    "Only you communicate with the user in a delegation chain. Sub-agents and workers return internal "
+    "material to you; their execution is not user delivery. Read and verify their result files, handle "
+    "missing information, and compose the user-facing response yourself. You own questions and "
+    "confirmation cards. Progress cards describe execution only."
+)
+
 
 def request_input(text, images=(), files=()):
     if images:

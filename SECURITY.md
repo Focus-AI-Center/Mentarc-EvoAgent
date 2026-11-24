@@ -65,6 +65,14 @@ current paths, lifecycle, configuration and ownership details.
 
 #### LOCAL mode → `LocalSubprocessBackend` (single-tenant only)
 
+Internal workers are enabled in both deployment modes. Their default profile
+declares `execute_code` independently of the main agent's `DEFAULT_PLUGINS`.
+Set `WORKER_ENABLED=false` to remove worker dispatch/collection tools; existing
+interactive agents and skill-granted tools retain their own configuration.
+Worker tool policies restrict user-facing and durable-state APIs, while generic
+code execution retains the backend's filesystem/network scope. Separate output
+directories do not provide OS isolation. See [worker boundaries](docs/workers.md).
+
 Same host as the server. The dispatcher hands the validated code to
 `subprocess.run` with `cwd` set to the user's workspace directory under
 `WORKSPACE_ROOT/{user_id}/`. There is **no kernel-level isolation** — no

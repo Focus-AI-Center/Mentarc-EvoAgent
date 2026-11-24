@@ -1,4 +1,6 @@
-"""Skill matcher - three-stage matching: keyword → embedding → LLM."""
+"""Keyword and embedding pre-matching, followed by main-agent fallback."""
+
+import asyncio
 
 import httpx
 from openai import AsyncOpenAI
@@ -19,7 +21,7 @@ from utils.usage import record_provider_usage
 
 
 class SkillMatcher:
-    """Three-stage skill matching: keyword → embedding → LLM."""
+    """Keyword and embedding pre-matching, with unmatched intent left to the main agent."""
 
     def __init__(self, skill_manager: SkillManager):
         self.skill_manager = skill_manager
@@ -36,11 +38,11 @@ class SkillMatcher:
         user_id: str,
         skills: dict[str, Skill] | None = None,
     ) -> SkillMatchResult:
-        """Match user input against available skills using three stages.
+        """Pre-match user input against the available skill catalog.
 
-        Stage 1: Keyword quick match (< 1ms)
-        Stage 2: Embedding similarity (< 50ms)
-        Stage 3: LLM intent matching (< 500ms, fallback)
+        Try keyword triggers, then embedding similarity. Without a match,
+        return an empty result and let the main model use its skill catalog.
+        The optional _llm_match helper is not part of this path.
 
         If *skills* is provided, uses that dict directly instead of
         reading from disk (avoids redundant I/O when the caller already
@@ -80,7 +82,7 @@ class SkillMatcher:
     async def _embedding_match(self, user_input: str, skills: dict[str, Skill]) -> SkillMatchResult:
         """Stage 2: Embedding-based semantic similarity matching."""
         try:
-            input_embedding = get_embedding(user_input)
+            input_embedding = await asyncio.to_thread(get_embedding, user_input)
         except Exception as e:
             logger.warning(f"Embedding match failed (input): {e}")
             return SkillMatchResult()
@@ -114,7 +116,7 @@ class SkillMatcher:
         triggers = ", ".join(skill.triggers) if skill.triggers else ""
         text = f"{skill.name}: {skill.description} ({triggers})"
         try:
-            embedding = get_embedding(text)
+            embedding = await asyncio.to_thread(get_embedding, text)
             self._skill_embeddings[skill.name] = embedding
             return embedding
         except Exception as e:

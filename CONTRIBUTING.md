@@ -21,7 +21,7 @@ cd Mentarc-EvoAgent
 python -m venv .venv
 source .venv/bin/activate          # or ".venv\Scripts\activate" on Windows
 
-pip install -e .[dev]
+pip install -e '.[dev]'
 cp .env.example .env               # fill in at least OPENAI_API_KEY
 ```
 
@@ -44,13 +44,13 @@ python cli.py --user demo          # or: evoagent-cli --user demo
 | `core/agent.py` | Main orchestrator (`EvoAgent`). ReAct loop, skill matching, Phase 2.5 trigger-based handoff. |
 | `core/sub_agent.py` | `SubAgentRunner` — loads `configs/agents/*.md` into SDK `Agent`. |
 | `core/runtime/` | Shared SDK execution, history conversion, event streams and session persistence. |
-| `core/tool_search.py` | Request-scoped keyword search and deferred tool schemas for main agents and sub-agents. |
-| `core/skills/` | 3-stage skill matcher + skill manager. |
+| `core/tool_search.py` | Exact-name loading, BM25F capability search and schema budgets for main agents and sub-agents. |
+| `core/skills/` | Keyword/embedding pre-matching, main-model fallback, skill management and proposal confirmation. |
 | `core/plugins/` | External tools (web_search, fetch_url, execute_code, ...) + internal tools (update_user_profile, memory, skill, sub_agent, parent_history). |
 | `configs/prompts/` | SOUL.md / USER.md / MEMORY.md / SESSION_UPDATE.md / SKILL_EXTRACT.md / SKILL_MATCH.md templates. |
 | `configs/skills/` | Built-in skills, each in `{name}/SKILL.md` + optional `references/`. |
 | `configs/agents/` | Sub-agent configs, each a single `.md` with YAML frontmatter. |
-| `utils/workspace.py` | Per-user local-filesystem workspace. |
+| `utils/workspace.py` | Per-user Workspace shared by LocalFS and MinIO storage. |
 | `utils/history_compressor.py` | Budgeted context compaction with validated summaries and recovery references. |
 | `utils/context_assets.py` | Shared memory-index loading limits and skill directory guidance for main agents, sub-agents, and internal tools. |
 
@@ -177,18 +177,46 @@ python3 -m unittest tests.unit.test_context_assets -v
 
 ## Code style
 
-- Python ≥ 3.10.
+- Python ≥ 3.11.
 - `ruff check .` and `ruff format --check .` must pass (run locally or watch CI).
+- Ruff is fixed at `0.11.13` in the dev dependencies, CI and pre-commit hook.
+  Upgrade all three together and review formatting changes deliberately; floating
+  formatter versions can add checks for Markdown code blocks and prompt examples.
 - Keep tool names `snake_case`, agent / skill names `kebab-case`.
 - Don't add unused imports; ruff will fail the build if you do.
 - Docstrings only when the *why* is non-obvious — don't paraphrase the code.
+
+## Continuous integration
+
+The [workflow](.github/workflows/ci.yml) runs the public-source/history check,
+Python lint and formatting on Python 3.11/3.12, and an import smoke plus offline
+unit tests on Python 3.11. The import/test job follows successful lint. A skipped
+downstream job does not imply that compilation or imports failed.
+
+Reproduce the runtime checks with the declared dependencies and isolated test
+configuration, without copying production credentials into the test run:
+
+```bash
+pip install -e '.[dev]'
+ruff check .
+ruff format --check .
+python -m compileall -q app core configs utils
+PYTHON_DOTENV_DISABLED=1 OPENAI_API_KEY=offline-test OPENAI_AGENTS_DISABLE_TRACING=1 \
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 MINIO_ENDPOINT= \
+  python -m pytest -p asyncio tests/unit/ -q --disable-warnings --tb=short
+```
+
+`PYTHON_DOTENV_DISABLED=1` keeps a developer's `.env` out of this test run.
+Live MinIO tests skip without an endpoint; real model and Docker/MCP transport
+validation remain separate integration checks. The standalone session updater
+and background worker tests use scripted models and mocked storage transports.
 
 ## PR expectations
 
 - One feature per PR. Keep diffs small and focused.
 - Update `README.md` / `SOUL.md` / relevant `.md` if you change user-visible behaviour or tool naming.
 - If you touch `execute_code` / auth / CORS / rate-limiting, update [SECURITY.md](SECURITY.md) accordingly.
-- CI is lint-only today; if a PR introduces tests, please add a `tests/` directory and tell us in the PR description.
+- Add meaningful regression tests for runtime changes and describe validation in the PR.
 
 ## Licence
 

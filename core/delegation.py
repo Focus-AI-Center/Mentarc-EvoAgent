@@ -1,4 +1,4 @@
-"""Shared task identity, live delivery and receipts for both delegation routes."""
+"""Shared task identity and separate internal and direct-session receipt paths."""
 
 import asyncio
 import hashlib
@@ -72,36 +72,41 @@ async def stream_handoff(tool, params, skill, history):
             record["delivery_events"].append(dict(event))
             yield event
         receipt = await task
-        if receipt.get("status") == "failed" and not set(receipt.get("delivered_codes", [])) & {2, 8, 10, 12}:
-            frame = {
-                "code": 2,
-                "content": "The delegated task failed. Please try again.",
-                "task_id": params.task_id,
-                "source_agent": params.agent_type,
-                "delivery_owner": params.agent_type,
-            }
-            record["delivery_events"].append(frame)
-            yield frame
     except Exception as exc:
         logger.exception("Sub-agent handoff failed")
         receipt = {**receipt, "status": "failed", "failures": [str(exc)]}
-        frame = {
-            "code": 2,
-            "content": "The delegated task failed. Please try again.",
-            "task_id": params.task_id,
-            "source_agent": params.agent_type,
-        }
-        record["delivery_events"].append(frame)
-        yield frame
     finally:
         if not task.done():
             task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        outcomes = await asyncio.gather(task, return_exceptions=True)
+        if isinstance(outcomes[0], dict):
+            receipt = outcomes[0]
+        elif receipt.get("status") == "interrupted":
+            for detail in tool.interruption_snapshot(params.model_dump_json()):
+                if detail.get("task_id") == params.task_id:
+                    receipt.update(
+                        {key: detail[key] for key in ("session_id", "output_dir") if key in detail}
+                    )
+                    break
         record["content"] = json.dumps(receipt, ensure_ascii=False)
 
 
-async def run_delegation(runner, task, context, task_id, emit=None):
-    """Keep all mutable delivery state local to one invocation."""
+async def run_delegation(
+    runner, task, context, task_id, emit=None, *, internal=False, workspace=None, output_dir=None
+):
+    """Main-agent calls use internal collection; direct callers retain their delivery adapter."""
+    if internal:
+        from core.runtime.internal_delegation import run_internal_delegation
+
+        return await run_internal_delegation(
+            runner,
+            task,
+            context,
+            task_id,
+            emit,
+            workspace=workspace or runner.workspace,
+            output_dir=output_dir,
+        )
     codes, produced = set(), {}
     delivered_frames, preview_frames, questions = [], [], []
     tool_outcomes = []
@@ -187,7 +192,7 @@ async def run_delegation(runner, task, context, task_id, emit=None):
         "tool_outcomes": tool_outcomes[-100:],
         "summary": summary[:1000] + ("\n...\n" + summary[-500:] if len(summary) > 1500 else summary[1000:]),
         "agent_instruction": (
-            "The child output was streamed directly to the user. Do not repeat it or regenerate delivered artifacts. "
+            "This direct-session output was already streamed to the user. Do not repeat it or regenerate delivered artifacts. "
             "Continue any other independent tasks. To revise or resume this task, delegate to the same owner "
             "with this exact task_id. waiting_user means the question was delivered, not that the task finished. "
             "Skill proposals require user confirmation before saving. Report failures accurately."

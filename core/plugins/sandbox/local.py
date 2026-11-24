@@ -7,8 +7,7 @@ confinement, timeout, and output truncation; this backend just runs the
 process under the user's workspace directory.
 
 For multi-tenant or untrusted use, switch to MINIO mode (which routes
-``execute_code`` to ``RemoteDockerBackend`` — a one-shot container per
-invocation).
+``execute_code`` to the reusable ``SessionDockerBackend``).
 """
 
 from __future__ import annotations

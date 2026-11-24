@@ -38,7 +38,7 @@ def tool_observation(value):
     failed = failed or value.get("status") in ("error", "failed")
     if failed:
         status = "error"
-    elif value.get("status") in ("interrupted", "unknown"):
+    elif value.get("status") in ("interrupted", "unknown", "queued", "running", "cancelled", "timeout"):
         status = "unknown"
     elif value.get("status") == "partial":
         status = "partial"

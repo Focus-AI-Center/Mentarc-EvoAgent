@@ -9,9 +9,11 @@ from utils.ws_call import ws_call
 
 
 class SkillToolMounter:
-    def __init__(self, tools, *, user_id, session_id, workspace):
+    def __init__(self, tools, *, user_id, session_id, workspace, policy=None, plugin_kwargs=None):
         self.tools = tools
         self.kwargs = dict(user_id=user_id, session_id=session_id, workspace=workspace)
+        self.kwargs.update(plugin_kwargs or {})
+        self.policy = policy
         self.workspace = workspace
         self.loaded = set()
         self.required = set()
@@ -29,6 +31,8 @@ class SkillToolMounter:
             return
         skill = skill_from_md(raw, fallback_name=name)
         names = {canonical_tool_name(tool) for tool in skill.required_tools}
+        if self.policy:
+            names = {name for name in names if self.policy.allows(name)}
         existing = {_normalize_plugin_name(tool.name) for tool in self.tools}
         missing = [
             name
@@ -42,9 +46,9 @@ class SkillToolMounter:
         self.loaded.add(name)
         if self.agent:
             if self.catalog:
-                await self.catalog.mount_skill_tools(names, convert_tools(new))
+                await self.catalog.mount_skill_tools(names, convert_tools(new, policy=self.policy))
             else:
-                self.agent.tools.extend(convert_tools(new))
+                self.agent.tools.extend(convert_tools(new, policy=self.policy))
 
     async def restore(self, history):
         for name in loaded_skill_names(history):

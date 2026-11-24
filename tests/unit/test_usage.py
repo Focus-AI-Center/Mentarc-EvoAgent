@@ -194,7 +194,7 @@ async def test_real_parent_and_child_sdk_usage_is_combined_without_double_counti
     monkeypatch.setattr(settings, "TOOLSEARCH_ENABLED", False)
     monkeypatch.setattr(main, "ENABLE_METRICS", True)
     monkeypatch.setattr(main.MCPToolManager, "create_tools", AsyncMock(return_value=[]))
-    monkeypatch.setattr(sub, "load_agent_config", lambda name: AgentTypeConfig(name=name))
+    monkeypatch.setattr(sub, "load_agent_config", lambda name, **kwargs: AgentTypeConfig(name=name))
     child_model = MeasuredModel(lambda *args: [final_message("A substantive child report")])
     monkeypatch.setattr(
         sub, "_SDKAgent", lambda **kwargs: main._SDKAgent(**(kwargs | {"model": child_model}))
@@ -207,12 +207,13 @@ async def test_real_parent_and_child_sdk_usage_is_combined_without_double_counti
                     type="function_call",
                     call_id="child",
                     name="sub_agent",
-                    arguments=json.dumps({"agent_type": "worker", "task": "report", "task_id": "a"}),
+                    arguments=json.dumps({"agent_type": "usage-child", "task": "report", "task_id": "a"}),
                 )
             ]
         return [final_message()]
 
     workspace = Workspace("alice", LocalFSBackend(tmp_path))
+    workspace.agent_set("usage-child", "---\nname: usage-child\n---\nReport findings.")
     agent = EvoAgent(
         "alice",
         "usage",
@@ -228,3 +229,48 @@ async def test_real_parent_and_child_sdk_usage_is_combined_without_double_counti
     assert metrics["usage_by_category"]["main"]["total_tokens"] == 36
     assert metrics["usage_by_category"]["child"]["total_tokens"] == 18
     assert child_model.turn == 1
+
+
+@pytest.mark.asyncio
+async def test_background_worker_and_parent_reentry_share_one_usage_collector(tmp_path, monkeypatch):
+    from openai.types.responses import ResponseFunctionToolCall
+
+    import core.agent as main
+    import core.sub_agent as sub
+
+    monkeypatch.setattr(settings, "TOOLSEARCH_ENABLED", False)
+    monkeypatch.setattr(main, "ENABLE_METRICS", True)
+    monkeypatch.setattr(main.MCPToolManager, "create_tools", AsyncMock(return_value=[]))
+    child_model = MeasuredModel(lambda *args: [final_message("Internal worker output")])
+    monkeypatch.setattr(
+        sub, "_SDKAgent", lambda **kwargs: main._SDKAgent(**(kwargs | {"model": child_model}))
+    )
+
+    def script(turn, tools, input):
+        if turn == 1:
+            return [
+                ResponseFunctionToolCall(
+                    type="function_call",
+                    call_id="worker",
+                    name="worker",
+                    arguments=json.dumps({"task": "Research", "task_id": "research"}),
+                )
+            ]
+        return [final_message("Parent delivery")]
+
+    model = MeasuredModel(script)
+    agent = EvoAgent(
+        "alice",
+        "worker-usage",
+        plugins=[],
+        workspace=Workspace("alice", LocalFSBackend(tmp_path)),
+        system_prompt="Offline",
+        model=model,
+    )
+    agent.skill_matcher.match = AsyncMock(return_value=SimpleNamespace(skill=None))
+    events = [event async for event in agent.run_stream("Research")]
+    metrics = json.loads(next(event["content"] for event in events if event["code"] == 6))
+    assert model.turn == 3 and child_model.turn == 1
+    assert metrics["usage"]["requests"] == 4 and metrics["usage"]["total_tokens"] == 72
+    assert metrics["usage_by_category"]["main"]["total_tokens"] == 54
+    assert metrics["usage_by_category"]["child"]["total_tokens"] == 18

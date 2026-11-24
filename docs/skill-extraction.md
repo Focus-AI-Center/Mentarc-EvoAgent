@@ -2,6 +2,25 @@
 
 The session updater and `session-reviewer` use an LLM to identify reusable workflows. Agents never write skills: the `skill` tool offers `list`, `get`, `get_ref` and `propose`. A proposal is staged on the server, shown to the user as a card with every file, and applied only when the user confirms. Extraction rules (criteria, fields, when to split into references) live in one place, [SKILL_EXTRACT](../configs/prompts/SKILL_EXTRACT.md); the session updater appends it and `session-reviewer` points to it.
 
+## Review audience
+
+The invocation route determines who presents a proposal:
+
+- The independent `SessionUpdater` behind the Update memory button talks to the
+  user and can call `skill(propose)` directly.
+- A directly connected `session-reviewer` can also propose to the user.
+- When the main agent delegates to `session-reviewer`, its system instructions
+  identify it as an internal analyst. It prepares complete candidate text or
+  patch details in task files. The main agent reads and verifies those files,
+  then calls `skill(propose)` and presents confirmation to the user. The child's
+  tool policy does not permit `propose`.
+- Background workers can prepare candidate files, but cannot propose or install
+  skills. Their completion is not user confirmation.
+
+The reviewer reads `prompts/SKILL_EXTRACT.md` through `workspace_file` before
+selecting candidates; the standalone updater appends the same rule document to
+its system prompt. See [invocation audience](agent-coordination.md#invocation-audience-and-internal-results).
+
 ## Flow
 
 ![Offline Evolution Loop](figures/offline-loop.svg)
@@ -13,7 +32,10 @@ flowchart TD
     S["Review starts on demand: Update memory button, or session-reviewer in chat"] --> L["skill list, then get / get_ref when improving a skill"]
     L --> Q{"Meets the SKILL_EXTRACT criteria?"}
     Q -->|no| N["No proposal"]
-    Q -->|yes| P["skill propose: create, update or patch"]
+    Q -->|yes| A{"Delegated reviewer?"}
+    A -->|yes| F["Candidate files; main agent reads and verifies"]
+    F --> P["User-facing agent calls skill propose: create, update or patch"]
+    A -->|no| P
     P --> V{"Valid? name, paths, size limits, unique patch match, no duplicate create"}
     V -->|no| R["Rejected with the reason; the agent corrects and proposes again"]
     R --> P
@@ -26,7 +48,7 @@ flowchart TD
     C -->|no| K["409: the agent reads the skill again and re-proposes"]
     C -->|yes| W["SkillManager applies the change; patches use a conditional write"]
     W -->|concurrent patch write conflict| K
-    W -->|success| U["Available on later turns; usage_count grows when used"]
+    W -->|success| U["Available on later turns; matched-guide loads update usage metadata"]
     U -.->|undo if a previous version exists| O["POST undo restores the previous version"]
 ```
 

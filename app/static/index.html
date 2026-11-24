@@ -350,6 +350,29 @@
     border-top: 1px solid var(--border-light);
   }
 
+  /* A worker keeps one expandable activity row throughout an execution attempt. */
+  .tool-card.worker-task { display: block; width: 100%; box-sizing: border-box; }
+  .worker-task summary { display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; }
+  .worker-task summary::-webkit-details-marker { display: none; }
+  .worker-task summary::after { content: '\203A'; color: var(--fg-muted); }
+  .worker-task[open] summary::after { transform: rotate(90deg); }
+  .worker-title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+  .worker-state { color: var(--fg-secondary); font-size: 0.7rem; white-space: nowrap; }
+  .worker-task.pending .worker-state { color: var(--accent); }
+  .worker-task.pending .worker-state::before { content: '\25CF '; animation: tool-pending-pulse 1.4s ease-in-out infinite; }
+  .worker-task.worker-failed .worker-state { color: #b45309; }
+  .worker-body { border-top: 1px solid var(--border-light); margin-top: 10px; padding-top: 8px; }
+  .worker-assignment, .worker-note { color: var(--fg-muted); line-height: 1.6; overflow-wrap: anywhere; }
+  .worker-tools { list-style: none; padding: 0 0 0 12px; margin: 8px 0; border-left: 1px solid var(--border-light); max-height: 200px; overflow-y: auto; }
+  .worker-tools li { display: flex; gap: 10px; justify-content: space-between; padding: 4px 0; }
+  .worker-tools span:last-child { color: var(--fg-muted); font-size: 0.68rem; }
+  .worker-files { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+  .worker-files a { color: var(--accent); overflow-wrap: anywhere; }
+  .worker-note { margin-top: 6px; font-size: 0.68rem; }
+  @media (prefers-reduced-motion: reduce) {
+    .worker-task.pending .worker-state::before { animation: none; }
+  }
+
   /* ===== Profile Update Card ===== */
   .profile-update-card {
     display: flex;
@@ -2764,6 +2787,10 @@ const TOOL_LABELS = {
   ask_user_question: 'Ask user',
   schedule_manager: 'Scheduled tasks',
   sub_agent: 'Sub-agent',
+  worker: 'Worker',
+  worker_status: 'Worker results',
+  worker_progress: 'Worker progress',
+  workspace_file: 'Workspace file',
   parent_history: 'Parent agent history',
 };
 // Lucide-style line icons (stroke=currentColor, inherits warm foreground)
@@ -2810,6 +2837,10 @@ const TOOL_ICONS = {
   ask_user_question: svgIcon('helpCircle'),
   schedule_manager: svgIcon('clock'),
   sub_agent: svgIcon('bot'),
+  worker: svgIcon('bot'),
+  worker_status: svgIcon('clipboard'),
+  worker_progress: svgIcon('clock'),
+  workspace_file: svgIcon('save'),
   parent_history: svgIcon('history'),
 };
 function _normalizeTool(name) {
@@ -2838,6 +2869,14 @@ function skillLabel(name) { return SKILL_LABELS[name] || name; }
 function toolResultSummary(name, result) {
   if (!result) return '';
   var text = typeof result === 'string' ? result : JSON.stringify(result);
+  if (name === 'worker_status') {
+    try {
+      const state = typeof result === 'string' ? JSON.parse(result) : result;
+      if (Array.isArray(state.finished) && Array.isArray(state.running)) {
+        return state.finished.length + ' collected, ' + state.running.length + ' running';
+      }
+    } catch {}
+  }
   if (name === 'html_render') return 'HTML page generated';
   if (name === 'amazonscraper') {
     try {
@@ -2876,7 +2915,9 @@ function toolInputSummary(name, args) {
   try { a = typeof args === 'string' ? JSON.parse(args) : args; } catch { return ''; }
   if (!a || typeof a !== 'object') return '';
   switch (name) {
-    case 'toolsearch': return a.query || '';
+    case 'worker': return a.title || 'Worker task';
+    case 'worker_status': return 'Collect worker results';
+    case 'toolsearch': return a.query || (Array.isArray(a.names) ? a.names.join(', ') : '');
     case 'websearch': return (a.query || a.keyword || a.search_query || '');
     case 'fetch_url': return (a.url || '').slice(0, 80);
     case 'update_user_profile': return 'Update ' + (a.field || a.param || Object.keys(a).join(', '));
@@ -3236,6 +3277,89 @@ function getToolTags(bubble) {
   return container;
 }
 
+function renderWorkerTask(bubble, receipt, callId = '') {
+  if (!receipt || typeof receipt !== 'object' || !receipt.task_id || !receipt.output_dir) return false;
+  const followChat = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 32;
+  const container = getToolTags(bubble);
+  const cards = [...container.querySelectorAll('.tool-card')];
+  let card = cards.find(node => node.dataset.workerOutput === receipt.output_dir);
+  const dispatch = callId && cards.find(node => node.dataset.toolId === callId && !node.dataset.workerOutput);
+  if (!card) {
+    card = document.createElement('details');
+    card.className = 'tool-card worker-task';
+    card.dataset.workerOutput = receipt.output_dir;
+    card.dataset.workerUser = document.getElementById('userId').value;
+    card.open = ['queued', 'running'].includes(receipt.status);
+    card.innerHTML = '<summary><span class="tool-icon">' + toolIcon('worker') + '</span>' +
+      '<span class="worker-title"></span><span class="worker-state"></span></summary><div class="worker-body"></div>';
+    if (dispatch) dispatch.replaceWith(card); else container.appendChild(card);
+  } else if (dispatch) dispatch.remove();
+  if (callId) card.dataset.toolId = callId;
+  card.dataset.toolName = 'worker';
+  const previous = card.workerReceipt || {};
+  // The dispatch receipt can arrive after a fast worker's terminal progress frame.
+  const terminal = status => status && !['queued', 'running'].includes(status);
+  if (terminal(previous.status) && !terminal(receipt.status)) return true;
+  // A running dispatch receipt acknowledges acceptance; queue progress is more precise.
+  if (callId && previous.status === 'queued' && receipt.status === 'running') receipt = { ...receipt, status: 'queued' };
+  const state = card.workerReceipt = { ...previous, ...receipt };
+  const running = !terminal(state.status);
+  card.classList.toggle('pending', running);
+  card.classList.toggle('done', !running);
+  card.classList.toggle('worker-failed', !running && state.status !== 'completed');
+  card.querySelector('.worker-title').textContent = state.title || state.task_id;
+  const labels = { queued: 'Queued', running: 'Running', completed: 'Completed', failed: 'Failed', timeout: 'Timed out', cancelled: 'Cancelled', needs_input: 'Needs input', unconfirmed: 'Unconfirmed' };
+  card.querySelector('.worker-state').textContent = (labels[state.status] || state.status || 'Running') +
+    (Number.isFinite(state.elapsed_seconds) ? ' · ' + Math.round(state.elapsed_seconds) + 's' : '');
+  const body = card.querySelector('.worker-body');
+  const oldList = body.querySelector('.worker-tools');
+  const listTop = oldList ? oldList.scrollTop : 0;
+  const followTools = !oldList || oldList.scrollHeight - listTop - oldList.clientHeight < 24;
+  body.replaceChildren();
+  const line = (className, text) => {
+    const el = document.createElement('div');
+    el.className = className;
+    el.textContent = text;
+    body.appendChild(el);
+    return el;
+  };
+  if (state.task) line('worker-assignment', state.task);
+  if (running && state.progress) line('worker-note', state.progress);
+  const calls = Array.isArray(state.tool_calls) ? state.tool_calls : state.tool_outcomes;
+  if (Array.isArray(calls) && calls.length) {
+    const list = document.createElement('ol');
+    list.className = 'worker-tools';
+    calls.slice(-100).forEach(call => {
+      const li = document.createElement('li');
+      const tool = document.createElement('span');
+      tool.textContent = toolLabel(call.tool || 'Tool');
+      const status = document.createElement('span');
+      status.textContent = labels[call.status] || call.status || '';
+      li.append(tool, status);
+      list.appendChild(li);
+    });
+    body.appendChild(list);
+    list.scrollTop = followTools ? list.scrollHeight : listTop;
+  }
+  const files = line('worker-files', '');
+  if (Array.isArray(state.files)) state.files.forEach(path => {
+    // Artifacts are downloaded as attachments; worker-generated HTML is never executed here.
+    if (typeof path !== 'string' || !path.startsWith(state.output_dir + '/') || !path.startsWith('workers/') ||
+        path.includes('\\') || path.split('/').some(part => !part || part === '.' || part === '..')) return;
+    const link = document.createElement('a');
+    link.textContent = path.slice(state.output_dir.length + 1);
+    link.href = '/api/workspace/' + encodeURIComponent(card.dataset.workerUser) + '/worker-files/' +
+      path.split('/').map(encodeURIComponent).join('/');
+    link.download = path.split('/').pop();
+    files.appendChild(link);
+  });
+  if (state.files_truncated) line('worker-note', 'Showing the first 100 files. More files are available in ' + state.output_dir);
+  if (state.error) line('worker-note', state.error);
+  if (!running && files.childElementCount) line('worker-note', 'Internal artifacts. The main agent verifies them before delivery.');
+  if (followChat) scrollToBottom();
+  return true;
+}
+
 function addToolCall(bubble, id, name, args) {
   if (!['skill', 'todo_manager', 'ask_user_question'].includes(name)) {
     flowStateFor(bubble.parentElement).pending.push({ icon: toolIcon(name), label: toolLabel(name) });
@@ -3248,17 +3372,27 @@ function addToolCall(bubble, id, name, args) {
   card.innerHTML =
     '<span class="tool-icon">' + toolIcon(name) + '</span>' +
     '<span class="tool-label">' + toolLabel(name) + '</span>' +
-    '<span class="tool-desc">' + (toolInputSummary(name, args) || 'Running…') + '</span>' +
+    '<span class="tool-desc">' + amzEsc(toolInputSummary(name, args) || 'Running…') + '</span>' +
     '<div class="tool-output"></div>';
   container.appendChild(card);
   scrollToBottom();
 }
 
-function addToolResult(bubble, id, name, result) {
+function addToolResult(bubble, id, name, result, streaming = false) {
+  if (['worker', 'sub_agent', 'worker_progress', 'worker_status'].includes(name)) {
+    try {
+      const state = typeof result === 'string' ? JSON.parse(result) : result;
+      if (name !== 'worker_status' && renderWorkerTask(bubble, state, ['worker', 'sub_agent'].includes(name) ? id : '')) return;
+      if (name === 'worker_status' && Array.isArray(state.finished) && Array.isArray(state.running)) {
+        [...state.finished, ...state.running].forEach(receipt => renderWorkerTask(bubble, receipt));
+        result = toolResultSummary(name, state);
+      }
+    } catch {}
+  }
   const container = getToolTags(bubble);
   // Match by id first, then fallback to name
-  let card = id ? container.querySelector('.tool-card[data-tool-id="' + id + '"]') : null;
-  if (!card) card = container.querySelector('.tool-card.pending[data-tool-name="' + name + '"]');
+  let card = id ? [...container.querySelectorAll('.tool-card')].find(node => node.dataset.toolId === id) : null;
+  if (!card && name !== 'worker_progress') card = [...container.querySelectorAll('.tool-card.pending')].find(node => node.dataset.toolName === name);
   if (!card) {
     card = document.createElement('div');
     card.className = 'tool-card';
@@ -3272,11 +3406,18 @@ function addToolResult(bubble, id, name, result) {
     container.appendChild(card);
   }
   // Update to done state
-  card.classList.remove('pending');
-  card.classList.add('done');
+  card.classList.toggle('pending', streaming);
+  card.classList.toggle('done', !streaming);
   // Update desc
   const desc = card.querySelector('.tool-desc');
-  if (desc && (desc.textContent === 'Running…' || desc.textContent === 'Running...' || !desc.textContent)) {
+  if (desc && name === 'worker_status') {
+    desc.textContent = typeof result === 'string' ? result : 'Worker results collected';
+  } else if (desc && name === 'worker_progress') {
+    try {
+      const state = JSON.parse(result);
+      desc.textContent = (state.title || state.task_id) + ' — ' + state.status;
+    } catch { desc.textContent = streaming ? 'Running…' : 'Finished'; }
+  } else if (desc && (desc.textContent === 'Running…' || desc.textContent === 'Running...' || !desc.textContent)) {
     desc.textContent = toolResultSummary(name, result) || 'Done';
   }
   // Fill output
@@ -3596,7 +3737,7 @@ async function send() {
           let info;
           try { info = JSON.parse(event.content); } catch { info = { name: '?', result: event.content }; }
           if (info.name === 'todo_manager' || info.name === 'ask_user_question') continue;
-          addToolResult(eventBubble, info.id || '', info.name, info.result || '');
+          addToolResult(eventBubble, info.id || '', info.name, info.result || '', !!info.streaming);
         } else if (event.code === 6) {
           // Metrics line
           let m;
@@ -3842,7 +3983,7 @@ async function updateSession() {
         } else if (event.code === 5) {
           let info;
           try { info = JSON.parse(event.content); } catch { info = { name: '?', result: event.content }; }
-          addToolResult(bubble, info.id || '', info.name, info.result || '');
+          addToolResult(bubble, info.id || '', info.name, info.result || '', !!info.streaming);
         }
       }
     }
@@ -4158,24 +4299,28 @@ async function loadSidebarFiles() {
 
 // ========== Sidebar Sub-agents ==========
 async function loadSidebarSubAgents() {
+  const userId = document.getElementById('userId').value;
+  if (!userId) return;
   try {
-    const res = await fetch('/api/sub-agent/types');
+    const res = await fetch('/api/sub-agent/types?userId=' + encodeURIComponent(userId));
     if (!res.ok) return;
     const data = await res.json();
+    if (document.getElementById('userId').value !== userId) return;
     const el = document.getElementById('subAgentsContent');
     const countEl = document.getElementById('subAgentCount');
     if (countEl) countEl.textContent = data.count || 0;
     if (!data.types || !data.types.length) {
-      el.innerHTML = '<div class="sidebar-section-empty">No sub-agents<br><span style="font-size:0.75rem;color:var(--fg-muted)">Add .md configurations under configs/agents/</span></div>';
+      el.innerHTML = '<div class="sidebar-section-empty">No sub-agents<br><span style="font-size:0.75rem;color:var(--fg-muted)">Add definitions under agents/ in your workspace</span></div>';
       return;
     }
     el.innerHTML = data.types.map(t => {
       const skillsLine = (t.skills && t.skills.length)
-        ? '<div class="skill-card-meta"><span>Skill: ' + t.skills.slice(0, 3).join(', ') + '</span></div>'
+        ? '<div class="skill-card-meta"><span>Skill: ' + t.skills.slice(0, 3).map(amzEsc).join(', ') + '</span></div>'
         : '';
       return '<div class="skill-card">' +
-        '<div class="skill-card-name">🤖 ' + (t.name || '') + '</div>' +
-        '<div class="skill-card-desc">' + (t.description || '') + '</div>' +
+        '<div class="skill-card-name">🤖 ' + amzEsc(t.name || '') + '</div>' +
+        '<div class="skill-card-desc">' + amzEsc(t.description || '') + '</div>' +
+        '<div class="skill-card-meta"><span>' + (t.execution_mode === 'worker' ? 'Internal worker · File outputs' : 'Interactive agent') + '</span></div>' +
         skillsLine +
       '</div>';
     }).join('');

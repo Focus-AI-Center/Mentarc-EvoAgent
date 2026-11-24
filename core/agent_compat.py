@@ -88,7 +88,7 @@ def convert_tool(tool_instance: Any) -> FunctionTool:
     )
 
 
-def convert_tools(tool_instances: list[Any]) -> list[FunctionTool]:
+def convert_tools(tool_instances: list[Any], *, policy=None) -> list[FunctionTool]:
     """Batch convert tool instances to FunctionTool list."""
     result = []
     for t in tool_instances:
@@ -96,4 +96,4 @@ def convert_tools(tool_instances: list[Any]) -> list[FunctionTool]:
             result.append(convert_tool(t))
         except Exception as e:
             logger.warning(f"Failed to convert tool {getattr(t, 'name', '?')}: {e}")
-    return result
+    return policy.filter(result) if policy else result

@@ -19,6 +19,7 @@ SERVER_BASE_URL = os.getenv("SERVER_BASE_URL", "http://localhost:8194")
 # --- Workspace ---
 DEFAULT_PROMPTS_DIR = os.getenv("DEFAULT_PROMPTS_DIR", "configs/prompts")
 DEFAULT_SKILLS_DIR = os.getenv("DEFAULT_SKILLS_DIR", "configs/skills")
+DEFAULT_AGENTS_DIR = os.getenv("DEFAULT_AGENTS_DIR", "configs/agents")
 WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", "data/workspace")
 
 # --- Agent ---
@@ -39,6 +40,15 @@ COMPRESSION_TIMEOUT_SECONDS = float(os.getenv("COMPRESSION_TIMEOUT_SECONDS", "12
 COMPRESSION_ASSET_INDEX_CHARS = int(os.getenv("COMPRESSION_ASSET_INDEX_CHARS", "12000"))
 SESSION_SAVE_TIMEOUT_SECONDS = float(os.getenv("SESSION_SAVE_TIMEOUT_SECONDS", "15"))
 
+# Request-local workers share one budget, including queueing and result collection.
+WORKER_ENABLED = os.getenv("WORKER_ENABLED", "true").lower() == "true"
+WORKER_MAX_PER_TURN = int(os.getenv("WORKER_MAX_PER_TURN", "8"))
+WORKER_MAX_CONCURRENCY = int(os.getenv("WORKER_MAX_CONCURRENCY", "4"))
+WORKER_TURN_TIMEOUT_SECONDS = float(os.getenv("WORKER_TURN_TIMEOUT_SECONDS", "540"))
+WORKER_REPLY_RESERVE_SECONDS = float(os.getenv("WORKER_REPLY_RESERVE_SECONDS", "60"))
+WORKER_WAIT_SECONDS = float(os.getenv("WORKER_WAIT_SECONDS", "30"))
+WORKER_CANCEL_TIMEOUT_SECONDS = float(os.getenv("WORKER_CANCEL_TIMEOUT_SECONDS", "20"))
+
 # --- Plugins ---
 # Conservative default: web-only, no code execution, no image tools. Users opt
 # into the full set (incl. execute_code) by setting DEFAULT_PLUGINS=all in .env
@@ -47,11 +57,14 @@ DEFAULT_PLUGINS = os.getenv("DEFAULT_PLUGINS", "web_search,fetch_url")
 
 # Tool discovery controls schema visibility, not plugin/MCP authorization.
 TOOLSEARCH_ENABLED = os.getenv("TOOLSEARCH_ENABLED", "true").lower() == "true"
+TOOLSEARCH_SEARCH_SCHEMA_CHARS = int(os.getenv("TOOLSEARCH_SEARCH_SCHEMA_CHARS", "24000"))
+TOOLSEARCH_ACTIVE_SCHEMA_CHARS = int(os.getenv("TOOLSEARCH_ACTIVE_SCHEMA_CHARS", "64000"))
 TOOLSEARCH_ALWAYS_LOADED = tuple(
     name.strip()
     for name in os.getenv(
         "TOOLSEARCH_ALWAYS_LOADED",
-        "memory,skill,update_user_profile,todo_manager,ask_user_question,sub_agent,parent_history",
+        "memory,skill,update_user_profile,todo_manager,ask_user_question,sub_agent,parent_history,"
+        "worker,worker_status,workspace_file",
     ).split(",")
     if name.strip()
 )
